@@ -34,12 +34,20 @@ type ClusterPeer = {
   lastSeen: number | null;
 };
 
+type ClusterLocalNode = {
+  displayAddress: string;
+  addresses: string[];
+  wsPort: number;
+  online: true;
+};
+
 type ClusterStateMessage = {
   type: "cluster_state";
   serverId: string;
   connectedClients: number;
   totalMessages: number;
   lastClipboardTimestamp: number | null;
+  localNode: ClusterLocalNode;
   peers: ClusterPeer[];
 };
 
@@ -76,6 +84,7 @@ export default function Index() {
   const [clusterConnectedClients, setClusterConnectedClients] = useState(0);
   const [clusterServerId, setClusterServerId] = useState<string | null>(null);
   const [peers, setPeers] = useState<ClusterPeer[]>([]);
+  const [localNode, setLocalNode] = useState<ClusterLocalNode | null>(null);
   const [clientId, setClientId] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -238,6 +247,22 @@ export default function Index() {
             );
             setClusterMessagesSeen(typeof payload.totalMessages === "number" ? payload.totalMessages : 0);
             setPeers(Array.isArray(payload.peers) ? (payload.peers as ClusterPeer[]) : []);
+            const incomingLocal = payload.localNode as Partial<ClusterLocalNode> | undefined;
+            if (
+              incomingLocal &&
+              typeof incomingLocal.displayAddress === "string" &&
+              Array.isArray(incomingLocal.addresses) &&
+              typeof incomingLocal.wsPort === "number"
+            ) {
+              setLocalNode({
+                displayAddress: incomingLocal.displayAddress,
+                addresses: incomingLocal.addresses.filter(
+                  (value): value is string => typeof value === "string"
+                ),
+                wsPort: incomingLocal.wsPort,
+                online: true
+              });
+            }
             if (typeof payload.lastClipboardTimestamp === "number") {
               setLastRemoteUpdate(new Date(payload.lastClipboardTimestamp).toLocaleTimeString());
             }
@@ -351,7 +376,8 @@ export default function Index() {
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
   const connectionBadgeVariant = isConnected ? "success" : "warning";
-  const onlinePeers = peers.filter((peer) => peer.online).length;
+  const totalNodes = peers.length + (localNode ? 1 : 0);
+  const onlineNodes = peers.filter((peer) => peer.online).length + (localNode ? 1 : 0);
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
@@ -393,6 +419,9 @@ export default function Index() {
             <div className="rounded-lg border border-border/70 bg-background/70 p-3 font-mono text-xs text-muted-foreground">
               <div>Status: {statusText}</div>
               <div className="mt-1">WebSocket: {wsUrl || `ws://<host>:${wsPort}`}</div>
+              <div className="mt-1">
+                Local IP: {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
+              </div>
               <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
             </div>
@@ -429,9 +458,9 @@ export default function Index() {
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Peers online</span>
+              <span className="text-muted-foreground">Nodes online</span>
               <span className="font-mono text-foreground">
-                {onlinePeers}/{peers.length}
+                {onlineNodes}/{totalNodes}
               </span>
             </div>
             <Separator />
@@ -441,11 +470,20 @@ export default function Index() {
             </div>
             <Separator />
             <div className="space-y-2">
-              <p className="text-muted-foreground">Connected peers</p>
-              {peers.length === 0 ? (
+              <p className="text-muted-foreground">Connected nodes</p>
+              {!localNode && peers.length === 0 ? (
                 <p className="text-xs text-foreground/90">No peers discovered yet.</p>
               ) : (
                 <ul className="space-y-1">
+                  {localNode ? (
+                    <li className="flex items-center justify-between text-xs">
+                      <span className="inline-flex items-center gap-2 font-mono">
+                        <span className="inline-block h-2 w-2 rounded-full bg-success" />
+                        {localNode.displayAddress}:{localNode.wsPort}
+                      </span>
+                      <span className="text-success">connected (local)</span>
+                    </li>
+                  ) : null}
                   {peers.map((peer) => (
                     <li key={peer.key} className="flex items-center justify-between text-xs">
                       <span className="inline-flex items-center gap-2 font-mono">

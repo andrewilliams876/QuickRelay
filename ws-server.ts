@@ -1,5 +1,6 @@
 import dgram from "node:dgram";
 import type { IncomingMessage } from "node:http";
+import os from "node:os";
 
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -39,12 +40,20 @@ type PeerSnapshot = {
   lastSeen: number | null;
 };
 
+type LocalNodeSnapshot = {
+  displayAddress: string;
+  addresses: string[];
+  wsPort: number;
+  online: true;
+};
+
 type ClusterStateMessage = {
   type: "cluster_state";
   serverId: string;
   connectedClients: number;
   totalMessages: number;
   lastClipboardTimestamp: number | null;
+  localNode: LocalNodeSnapshot;
   peers: PeerSnapshot[];
 };
 
@@ -71,6 +80,9 @@ const peerReconnectMs = Number(process.env.PEER_RECONNECT_MS ?? 3000);
 const seenMessageTtlMs = Number(process.env.SEEN_MESSAGE_TTL_MS ?? 120000);
 const clusterStateIntervalMs = Number(process.env.CLUSTER_STATE_INTERVAL_MS ?? 1500);
 const serverId = process.env.SERVER_ID ?? makeId();
+const localNodeAddresses = getLocalNodeAddresses();
+const localAddressSet = new Set(localNodeAddresses);
+const localNodeAliases = new Set<string>();
 
 const peerSeeds = (process.env.PEER_SEEDS ?? "")
   .split(",")
@@ -82,7 +94,11 @@ const peerSeeds = (process.env.PEER_SEEDS ?? "")
       return null;
     }
     const normalizedHost = normalizeAddress(host);
-    return { host: normalizedHost, port: Number(rawPort), key: `${normalizedHost}:${rawPort}` };
+    const port = Number(rawPort);
+    if (isSelfSeed(normalizedHost, port)) {
+      return null;
+    }
+    return { host: normalizedHost, port, key: `${normalizedHost}:${rawPort}` };
   })
   .filter((value): value is { host: string; port: number; key: string } => value !== null);
 
@@ -126,6 +142,68 @@ function normalizeAddress(raw: string) {
     return "127.0.0.1";
   }
   return raw;
+}
+
+function getLocalNodeAddresses() {
+  const addresses = new Set<string>();
+  const interfaces = os.networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.family !== "IPv4") {
+        continue;
+      }
+      addresses.add(normalizeAddress(entry.address));
+    }
+  }
+  if (addresses.size === 0) {
+    addresses.add("127.0.0.1");
+  }
+  return Array.from(addresses).sort();
+}
+
+function pickLocalAddress(addresses: string[]) {
+  const nonLoopback = addresses.find((value) => value !== "127.0.0.1");
+  return nonLoopback ?? addresses[0] ?? "127.0.0.1";
+}
+
+function isSelfSeed(host: string, port: number) {
+  if (port !== wsPort) {
+    return false;
+  }
+  if (host === "localhost") {
+    return true;
+  }
+  return localAddressSet.has(normalizeAddress(host));
+}
+
+function getResolvedLocalAddresses() {
+  const addresses = new Set(localNodeAddresses);
+  for (const alias of localNodeAliases) {
+    addresses.add(alias);
+  }
+  return Array.from(addresses).sort();
+}
+
+function markPeerAsLocalAlias(host: string, port: number) {
+  const normalizedHost = normalizeAddress(host);
+  if (!normalizedHost) {
+    return;
+  }
+  if (port === wsPort) {
+    localNodeAliases.add(normalizedHost);
+  }
+  const peerKey = `${normalizedHost}:${port}`;
+  peerMetadata.delete(peerKey);
+  outboundPeers.delete(peerKey);
+  clearReconnectTimer(peerKey);
+  for (const [remoteServerId, peer] of discoveredPeers) {
+    if (peer.key === peerKey) {
+      discoveredPeers.delete(remoteServerId);
+    }
+  }
 }
 
 function parseJson(raw: unknown): unknown {
@@ -281,26 +359,52 @@ function getConnectedClientCount() {
   return count;
 }
 
+function isPeerMetaOnline(meta: PeerMeta) {
+  const outbound = outboundPeers.get(meta.key);
+  if (outbound && outbound.readyState === WebSocket.OPEN) {
+    return true;
+  }
+  if (!meta.serverId) {
+    return false;
+  }
+  for (const socket of inboundSockets) {
+    if (
+      socket.readyState === WebSocket.OPEN &&
+      socketRoles.get(socket) === "peer" &&
+      peerSocketIds.get(socket) === meta.serverId
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function inferLikelyLocalAliasFromSeeds() {
+  const unresolvedSeedPeers: PeerMeta[] = [];
+  let knownRemotePeers = 0;
+
+  for (const meta of peerMetadata.values()) {
+    const online = isPeerMetaOnline(meta);
+    if (meta.serverId && meta.serverId !== serverId) {
+      knownRemotePeers += 1;
+    }
+    if (meta.fromSeed && meta.port === wsPort && !meta.serverId && !online) {
+      unresolvedSeedPeers.push(meta);
+    }
+  }
+
+  if (knownRemotePeers >= 1 && unresolvedSeedPeers.length === 1) {
+    const candidate = unresolvedSeedPeers[0];
+    markPeerAsLocalAlias(candidate.host, candidate.port);
+  }
+}
+
 function getPeerSnapshots(): PeerSnapshot[] {
   const snapshots: PeerSnapshot[] = [];
   for (const meta of peerMetadata.values()) {
-    let online = false;
-    const outbound = outboundPeers.get(meta.key);
-    if (outbound && outbound.readyState === WebSocket.OPEN) {
-      online = true;
-    }
-
-    if (!online && meta.serverId) {
-      for (const socket of inboundSockets) {
-        if (
-          socket.readyState === WebSocket.OPEN &&
-          socketRoles.get(socket) === "peer" &&
-          peerSocketIds.get(socket) === meta.serverId
-        ) {
-          online = true;
-          break;
-        }
-      }
+    const online = isPeerMetaOnline(meta);
+    if (!online && !meta.serverId) {
+      continue;
     }
 
     snapshots.push({
@@ -318,12 +422,21 @@ function getPeerSnapshots(): PeerSnapshot[] {
 }
 
 function buildClusterState(): ClusterStateMessage {
+  inferLikelyLocalAliasFromSeeds();
+  const addresses = getResolvedLocalAddresses();
+  const preferredAddresses = [...localNodeAliases, ...localNodeAddresses];
   return {
     type: "cluster_state",
     serverId,
     connectedClients: getConnectedClientCount(),
     totalMessages,
     lastClipboardTimestamp: latestMessage?.timestamp ?? null,
+    localNode: {
+      displayAddress: pickLocalAddress(preferredAddresses),
+      addresses,
+      wsPort,
+      online: true
+    },
     peers: getPeerSnapshots()
   };
 }
@@ -419,6 +532,10 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
 
     if (isPeerHelloMessage(parsed)) {
       if (parsed.serverId === serverId) {
+        const remoteHost = normalizeAddress(request.socket.remoteAddress ?? "");
+        const remoteWsPort = typeof parsed.wsPort === "number" ? parsed.wsPort : wsPort;
+        markPeerAsLocalAlias(remoteHost, remoteWsPort);
+        broadcastClusterState();
         socket.close(1000, "Ignoring self peer");
         return;
       }
@@ -532,6 +649,8 @@ function connectToPeer(host: string, port: number, peerKey: string) {
 
     if (isPeerHelloMessage(parsed)) {
       if (parsed.serverId === serverId) {
+        markPeerAsLocalAlias(host, port);
+        broadcastClusterState();
         socket.close(1000, "Ignoring self peer");
         return;
       }
