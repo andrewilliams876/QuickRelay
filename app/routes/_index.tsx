@@ -21,9 +21,30 @@ type ClipboardUpdateMessage = {
   text: string;
   clientId: string;
   timestamp: number;
+  messageId?: string;
+  originServerId?: string;
+};
+
+type ClusterPeer = {
+  key: string;
+  host: string;
+  port: number;
+  serverId: string | null;
+  online: boolean;
+  lastSeen: number | null;
+};
+
+type ClusterStateMessage = {
+  type: "cluster_state";
+  serverId: string;
+  connectedClients: number;
+  totalMessages: number;
+  lastClipboardTimestamp: number | null;
+  peers: ClusterPeer[];
 };
 
 type PermissionLevel = "checking" | "granted" | "limited" | "blocked";
+type WsInboundMessage = ClipboardUpdateMessage | ClusterStateMessage;
 
 export const meta: MetaFunction = () => {
   return [{ title: "LAN Clipboard | Sync Text Between PCs" }];
@@ -50,7 +71,11 @@ export default function Index() {
   const [isConnected, setIsConnected] = useState(false);
   const [permissionLevel, setPermissionLevel] = useState<PermissionLevel>("checking");
   const [lastRemoteUpdate, setLastRemoteUpdate] = useState<string | null>(null);
-  const [updatesSent, setUpdatesSent] = useState(0);
+  const [localMessagesSent, setLocalMessagesSent] = useState(0);
+  const [clusterMessagesSeen, setClusterMessagesSeen] = useState(0);
+  const [clusterConnectedClients, setClusterConnectedClients] = useState(0);
+  const [clusterServerId, setClusterServerId] = useState<string | null>(null);
+  const [peers, setPeers] = useState<ClusterPeer[]>([]);
   const [clientId, setClientId] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -59,6 +84,8 @@ export default function Index() {
   const lastClipboardRef = useRef("");
   const skipBroadcastUntilRef = useRef(0);
   const clientIdRef = useRef("");
+  const lastUserEditAtRef = useRef(0);
+  const lastTimestampByClientRef = useRef(new Map<string, number>());
 
   const wsUrl = useMemo(() => {
     if (typeof window === "undefined") {
@@ -80,7 +107,7 @@ export default function Index() {
       timestamp: Date.now()
     };
     ws.send(JSON.stringify(payload));
-    setUpdatesSent((value) => value + 1);
+    setLocalMessagesSent((value) => value + 1);
   }, []);
 
   const refreshPermissionState = useCallback(async () => {
@@ -114,26 +141,42 @@ export default function Index() {
     }
   }, []);
 
-  const applyRemoteClipboard = useCallback(async (incomingText: string, timestamp: number) => {
-    lastClipboardRef.current = incomingText;
-    skipBroadcastUntilRef.current = Date.now() + 2_000;
-    setClipboardText(incomingText);
-    setLastRemoteUpdate(new Date(timestamp).toLocaleTimeString());
+  const applyRemoteClipboard = useCallback(
+    async (incomingText: string, timestamp: number, sourceClientId: string) => {
+      const previousTimestamp = lastTimestampByClientRef.current.get(sourceClientId) ?? 0;
+      if (timestamp < previousTimestamp) {
+        return;
+      }
+      lastTimestampByClientRef.current.set(sourceClientId, timestamp);
 
-    if (!navigator.clipboard?.writeText) {
-      setStatusText("Remote text received. Clipboard write API is unavailable.");
-      return;
-    }
+      lastClipboardRef.current = incomingText;
+      skipBroadcastUntilRef.current = Date.now() + 5_000;
+      lastUserEditAtRef.current = Date.now();
+      setClipboardText(incomingText);
+      setLastRemoteUpdate(new Date(timestamp).toLocaleTimeString());
 
-    try {
-      await navigator.clipboard.writeText(incomingText);
-      setStatusText("Remote clipboard update applied automatically.");
-    } catch {
-      setStatusText("Remote text received, but browser blocked clipboard write.");
-    }
-  }, []);
+      if (!navigator.clipboard?.writeText) {
+        setStatusText("Remote text received. Clipboard write API is unavailable.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(incomingText);
+        setStatusText("Remote clipboard update applied automatically.");
+      } catch {
+        setStatusText("Remote text received, but browser blocked clipboard write.");
+      }
+    },
+    []
+  );
 
   const pollLocalClipboard = useCallback(async () => {
+    if (permissionLevel !== "granted") {
+      return;
+    }
+    if (Date.now() - lastUserEditAtRef.current < 15_000) {
+      return;
+    }
     if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
       setPermissionLevel("blocked");
       return;
@@ -142,6 +185,10 @@ export default function Index() {
     try {
       const text = await navigator.clipboard.readText();
       if (text === lastClipboardRef.current) {
+        return;
+      }
+
+      if (text === "" && lastClipboardRef.current !== "") {
         return;
       }
 
@@ -156,7 +203,7 @@ export default function Index() {
       setStatusText("Clipboard read blocked by browser permissions.");
       setPermissionLevel((current) => (current === "granted" ? "limited" : current));
     }
-  }, [sendClipboard]);
+  }, [permissionLevel, sendClipboard]);
 
   useEffect(() => {
     if (!wsUrl) {
@@ -179,12 +226,24 @@ export default function Index() {
         }
         setIsConnected(true);
         setStatusText("Connected. Watching clipboard changes.");
-        void pollLocalClipboard();
       };
 
       socket.onmessage = (event) => {
         try {
-          const payload = JSON.parse(event.data) as Partial<ClipboardUpdateMessage>;
+          const payload = JSON.parse(String(event.data)) as Partial<WsInboundMessage>;
+          if (payload.type === "cluster_state") {
+            setClusterServerId(typeof payload.serverId === "string" ? payload.serverId : null);
+            setClusterConnectedClients(
+              typeof payload.connectedClients === "number" ? payload.connectedClients : 0
+            );
+            setClusterMessagesSeen(typeof payload.totalMessages === "number" ? payload.totalMessages : 0);
+            setPeers(Array.isArray(payload.peers) ? (payload.peers as ClusterPeer[]) : []);
+            if (typeof payload.lastClipboardTimestamp === "number") {
+              setLastRemoteUpdate(new Date(payload.lastClipboardTimestamp).toLocaleTimeString());
+            }
+            return;
+          }
+
           if (payload.type !== "clipboard_update" || typeof payload.text !== "string") {
             return;
           }
@@ -196,7 +255,8 @@ export default function Index() {
           }
           void applyRemoteClipboard(
             payload.text,
-            typeof payload.timestamp === "number" ? payload.timestamp : Date.now()
+            typeof payload.timestamp === "number" ? payload.timestamp : Date.now(),
+            typeof payload.clientId === "string" ? payload.clientId : "unknown-client"
           );
         } catch {
           setStatusText("Received malformed sync payload.");
@@ -225,8 +285,10 @@ export default function Index() {
     }
     connect();
     clipboardPollRef.current = window.setInterval(() => {
-      void pollLocalClipboard();
-    }, 1_100);
+      if (!document.hidden) {
+        void pollLocalClipboard();
+      }
+    }, 1_300);
 
     return () => {
       isCancelled = true;
@@ -270,6 +332,8 @@ export default function Index() {
       setClipboardText(value);
       lastClipboardRef.current = value;
       skipBroadcastUntilRef.current = 0;
+      lastUserEditAtRef.current = Date.now();
+
       try {
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(value);
@@ -277,6 +341,7 @@ export default function Index() {
       } catch {
         setStatusText("Shared to peers, but clipboard write is blocked locally.");
       }
+
       sendClipboard(value);
       setStatusText("Shared text to LAN peers.");
     },
@@ -285,8 +350,8 @@ export default function Index() {
 
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
-
   const connectionBadgeVariant = isConnected ? "success" : "warning";
+  const onlinePeers = peers.filter((peer) => peer.online).length;
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
@@ -328,6 +393,7 @@ export default function Index() {
             <div className="rounded-lg border border-border/70 bg-background/70 p-3 font-mono text-xs text-muted-foreground">
               <div>Status: {statusText}</div>
               <div className="mt-1">WebSocket: {wsUrl || `ws://<host>:${wsPort}`}</div>
+              <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
             </div>
           </CardContent>
@@ -344,12 +410,29 @@ export default function Index() {
         <Card>
           <CardHeader>
             <CardTitle className="text-xl">Session Stats</CardTitle>
-            <CardDescription>Live health for this node.</CardDescription>
+            <CardDescription>Live health for this node and connected peers.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Messages sent</span>
-              <span className="font-mono text-foreground">{updatesSent}</span>
+              <span className="text-muted-foreground">Local messages sent</span>
+              <span className="font-mono text-foreground">{localMessagesSent}</span>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Cluster messages seen</span>
+              <span className="font-mono text-foreground">{clusterMessagesSeen}</span>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Clients on this node</span>
+              <span className="font-mono text-foreground">{clusterConnectedClients}</span>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Peers online</span>
+              <span className="font-mono text-foreground">
+                {onlinePeers}/{peers.length}
+              </span>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
@@ -357,12 +440,29 @@ export default function Index() {
               <span className="font-mono text-foreground">{lastRemoteUpdate ?? "None yet"}</span>
             </div>
             <Separator />
-            <div className="space-y-1">
-              <p className="text-muted-foreground">How to use</p>
-              <p className="text-xs text-foreground/90">
-                Open this app on each PC in the LAN. Keep tabs active. Clipboard APIs may require HTTPS for full
-                auto-read and auto-write behavior.
-              </p>
+            <div className="space-y-2">
+              <p className="text-muted-foreground">Connected peers</p>
+              {peers.length === 0 ? (
+                <p className="text-xs text-foreground/90">No peers discovered yet.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {peers.map((peer) => (
+                    <li key={peer.key} className="flex items-center justify-between text-xs">
+                      <span className="inline-flex items-center gap-2 font-mono">
+                        <span
+                          className={`inline-block h-2 w-2 rounded-full ${
+                            peer.online ? "bg-success" : "bg-warning"
+                          }`}
+                        />
+                        {peer.host}:{peer.port}
+                      </span>
+                      <span className={peer.online ? "text-success" : "text-warning"}>
+                        {peer.online ? "connected" : "offline"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </CardContent>
         </Card>

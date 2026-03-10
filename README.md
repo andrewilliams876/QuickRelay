@@ -7,18 +7,21 @@ Realtime text clipboard sync across devices on the same LAN.
 - Remix (React + TypeScript)
 - Tailwind + shadcn-style component primitives
 - WebSocket backend (`ws`)
+- UDP peer auto-discovery + static peer seeding
 - Docker / Docker Compose
 
 ## What it does
 
-- Polls your local clipboard for text updates.
-- Broadcasts updates to peers over LAN websocket server.
-- Applies incoming text to clipboard automatically when browser permissions allow it.
+- Syncs shared text between browser tabs on different machines.
+- Relays clipboard updates across server peers on your LAN.
+- Deduplicates messages to avoid peer loops.
+- Shows cluster stats and peer online status (IP + connected/offline).
 
 ## Quick start (Docker)
 
 ```bash
-docker compose up --build
+docker compose up --build -d
+docker compose logs -f
 ```
 
 Open on each PC:
@@ -27,23 +30,20 @@ Open on each PC:
 http://<SERVER_LAN_IP>:3000
 ```
 
-WebSocket endpoint is:
+## Ports
 
-```text
-ws://<SERVER_LAN_IP>:3001
-```
+- `3000/tcp`: Remix UI
+- `3001/tcp`: WebSocket sync
+- `4001/udp`: Peer discovery broadcast
 
-## Local development
+## Environment flags
 
-```bash
-npm install
-npm run dev
-```
+- `PEER_SEEDS=10.50.100.13:3001,10.50.100.6:3001` for deterministic peer linking
+- `DISCOVERY_ENABLED=true` enables UDP auto-discovery
+- `CLUSTER_STATE_INTERVAL_MS=1500` controls peer/status UI refresh interval
 
-## Notes on automatic clipboard behavior
+## Troubleshooting
 
-Browsers apply security restrictions to `navigator.clipboard` APIs:
-
-- Some browsers require HTTPS (or localhost) for read/write.
-- Permission prompts may appear the first time.
-- If blocked, the text box still syncs across devices, and manual copy remains available.
+- Open firewall for `3000/tcp`, `3001/tcp`, `4001/udp` on every machine.
+- If discovery does not work on your Docker/network setup, keep `PEER_SEEDS` populated.
+- Clipboard APIs can still be browser-restricted on plain HTTP. Textbox sync still works as fallback.
