@@ -105,6 +105,8 @@ const peerReconnectMs = Number(process.env.PEER_RECONNECT_MS ?? 3000);
 const seenMessageTtlMs = Number(process.env.SEEN_MESSAGE_TTL_MS ?? 120000);
 const clusterStateIntervalMs = Number(process.env.CLUSTER_STATE_INTERVAL_MS ?? 1500);
 const serverId = process.env.SERVER_ID ?? makeId();
+const accessPin = (process.env.ACCESS_PIN ?? "").trim();
+const authRequired = accessPin.length > 0;
 const localNodeIpOverride = normalizeAddress((process.env.LOCAL_NODE_IP ?? "").trim()) || null;
 const localNodeAddresses = getLocalNodeAddresses(localNodeIpOverride);
 const localAddressSet = new Set(localNodeAddresses);
@@ -152,7 +154,17 @@ let discoveryTimer: NodeJS.Timeout | null = null;
 let cleanupTimer: NodeJS.Timeout | null = null;
 let clusterStateTimer: NodeJS.Timeout | null = null;
 
-const wsServer = new WebSocketServer({ host: wsHost, port: wsPort });
+const wsServer = new WebSocketServer({
+  host: wsHost,
+  port: wsPort,
+  verifyClient: (info, done) => {
+    if (isAuthorizedWsRequest(info.req)) {
+      done(true);
+      return;
+    }
+    done(false, 401, "Unauthorized");
+  }
+});
 
 function makeId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -221,6 +233,20 @@ function getRemoteIp(request: IncomingMessage) {
     }
   }
   return normalizeAddress(request.socket.remoteAddress ?? "unknown");
+}
+function isAuthorizedWsRequest(request: IncomingMessage) {
+  if (!authRequired) {
+    return true;
+  }
+
+  const hostHeader = request.headers.host ?? `localhost:${wsPort}`;
+  try {
+    const url = new URL(request.url ?? "/", `http://${hostHeader}`);
+    const token = (url.searchParams.get("token") ?? "").trim();
+    return token.length > 0 && token === accessPin;
+  } catch {
+    return false;
+  }
 }
 
 function isLikelyVirtualOrBridgeAddress(ip: string) {
@@ -781,6 +807,14 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
   });
 }
 
+
+function buildPeerWebSocketUrl(host: string, port: number) {
+  const url = new URL(`ws://${host}:${port}`);
+  if (authRequired) {
+    url.searchParams.set("token", accessPin);
+  }
+  return url.toString();
+}
 function clearReconnectTimer(peerKey: string) {
   const timer = reconnectTimers.get(peerKey);
   if (!timer) {
@@ -827,7 +861,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
 
   clearReconnectTimer(peerKey);
 
-  const socket = new WebSocket(`ws://${host}:${port}`);
+  const socket = new WebSocket(buildPeerWebSocketUrl(host, port));
   outboundPeers.set(peerKey, socket);
 
   socket.on("open", () => {

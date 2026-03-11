@@ -68,20 +68,23 @@ export async function loader() {
   return json({
     wsPort: process.env.WS_PORT ?? "3001",
     wsPublicPath: process.env.WS_PUBLIC_PATH ?? "",
-    wsPublicUrl: process.env.WS_PUBLIC_URL ?? ""
+    wsPublicUrl: process.env.WS_PUBLIC_URL ?? "",
+    authRequired: Boolean((process.env.ACCESS_PIN ?? "").trim())
   });
 }
 
 function resolveWebSocketUrl({
   wsPort,
   wsPublicPath,
-  wsPublicUrl
+  wsPublicUrl,
+  accessToken
 }: {
   wsPort: string;
   wsPublicPath: string;
   wsPublicUrl: string;
+  accessToken: string;
 }) {
-  return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl })[0] ?? "";
+  return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl, accessToken })[0] ?? "";
 }
 
 function isIpv4Host(hostname: string) {
@@ -102,14 +105,30 @@ function isDirectHost(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || isIpv4Host(hostname);
 }
 
+function withAccessToken(urlValue: string, accessToken: string) {
+  const token = accessToken.trim();
+  if (!token) {
+    return urlValue;
+  }
+  try {
+    const url = new URL(urlValue);
+    url.searchParams.set("token", token);
+    return url.toString();
+  } catch {
+    return urlValue;
+  }
+}
+
 function buildWebSocketCandidates({
   wsPort,
   wsPublicPath,
-  wsPublicUrl
+  wsPublicUrl,
+  accessToken
 }: {
   wsPort: string;
   wsPublicPath: string;
   wsPublicUrl: string;
+  accessToken: string;
 }) {
   if (typeof window === "undefined") {
     return [];
@@ -120,18 +139,18 @@ function buildWebSocketCandidates({
   if (trimmedPublicUrl) {
     if (trimmedPublicUrl.startsWith("ws://") || trimmedPublicUrl.startsWith("wss://")) {
       candidates.push(trimmedPublicUrl);
-      return candidates;
+      return candidates.map((candidate) => withAccessToken(candidate, accessToken));
     }
     if (trimmedPublicUrl.startsWith("http://")) {
       candidates.push(`ws://${trimmedPublicUrl.slice("http://".length)}`);
-      return candidates;
+      return candidates.map((candidate) => withAccessToken(candidate, accessToken));
     }
     if (trimmedPublicUrl.startsWith("https://")) {
       candidates.push(`wss://${trimmedPublicUrl.slice("https://".length)}`);
-      return candidates;
+      return candidates.map((candidate) => withAccessToken(candidate, accessToken));
     }
     candidates.push(trimmedPublicUrl);
-    return candidates;
+    return candidates.map((candidate) => withAccessToken(candidate, accessToken));
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -145,11 +164,11 @@ function buildWebSocketCandidates({
     if (!candidates.includes(directUrl)) {
       candidates.push(directUrl);
     }
-    return candidates;
+    return candidates.map((candidate) => withAccessToken(candidate, accessToken));
   }
 
   candidates.push(directUrl);
-  return candidates;
+  return candidates.map((candidate) => withAccessToken(candidate, accessToken));
 }
 
 function makeClientId() {
@@ -268,7 +287,7 @@ function selectBestIp(ips: string[]) {
 }
 
 export default function Index() {
-  const { wsPort, wsPublicPath, wsPublicUrl } = useLoaderData<typeof loader>();
+  const { wsPort, wsPublicPath, wsPublicUrl, authRequired } = useLoaderData<typeof loader>();
 
   const [clipboardText, setClipboardText] = useState("");
   const [statusText, setStatusText] = useState("Connecting to LAN sync server...");
@@ -284,6 +303,8 @@ export default function Index() {
   const [clientId, setClientId] = useState("");
   const [clientName, setClientName] = useState("");
   const [deviceIp, setDeviceIp] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [authGateLocked, setAuthGateLocked] = useState(authRequired);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -293,15 +314,16 @@ export default function Index() {
   const clientIdRef = useRef("");
   const clientNameRef = useRef("");
   const deviceIpRef = useRef("");
+  const accessTokenRef = useRef("");
   const lastUserEditAtRef = useRef(0);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
 
   const wsUrl = useMemo(() => {
-    return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl });
-  }, [wsPort, wsPublicPath, wsPublicUrl]);
+    return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl, accessToken });
+  }, [accessToken, wsPort, wsPublicPath, wsPublicUrl]);
   const wsCandidates = useMemo(() => {
-    return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl });
-  }, [wsPort, wsPublicPath, wsPublicUrl]);
+    return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl, accessToken });
+  }, [accessToken, wsPort, wsPublicPath, wsPublicUrl]);
   const connectAttemptRef = useRef(0);
   const [activeWsUrl, setActiveWsUrl] = useState("");
 
@@ -350,17 +372,34 @@ export default function Index() {
       setClientId(clientIdRef.current);
     }
 
-    const stored = window.localStorage.getItem("quickRelayClientName") ?? window.localStorage.getItem("lanClipboardClientName");
+    const stored =
+      window.localStorage.getItem("quickRelayClientName") ??
+      window.localStorage.getItem("lanClipboardClientName");
     const resolvedName = stored && stored.trim() ? stored.trim() : makeDefaultClientName();
     clientNameRef.current = resolvedName;
     setClientName(resolvedName);
     window.localStorage.setItem("quickRelayClientName", resolvedName);
 
-    const storedIp = window.localStorage.getItem("quickRelayDeviceIp") ?? window.localStorage.getItem("lanClipboardDeviceIp") ?? "";
+    const storedIp =
+      window.localStorage.getItem("quickRelayDeviceIp") ??
+      window.localStorage.getItem("lanClipboardDeviceIp") ??
+      "";
     if (storedIp && isValidClientIp(storedIp)) {
       deviceIpRef.current = storedIp;
       setDeviceIp(storedIp);
     }
+
+    const storedAccessToken = window.localStorage.getItem("quickRelayAccessToken") ?? "";
+    let resolvedAccessToken = storedAccessToken;
+    if (authRequired && !resolvedAccessToken.trim()) {
+      resolvedAccessToken = window.prompt("Enter ACCESS_PIN for QuickRelay")?.trim() ?? "";
+      if (resolvedAccessToken) {
+        window.localStorage.setItem("quickRelayAccessToken", resolvedAccessToken);
+      }
+    }
+    accessTokenRef.current = resolvedAccessToken;
+    setAccessToken(resolvedAccessToken);
+    setAuthGateLocked(authRequired && !resolvedAccessToken.trim());
 
     void detectDeviceIp().then((ip) => {
       if (!ip) {
@@ -371,7 +410,7 @@ export default function Index() {
       window.localStorage.setItem("quickRelayDeviceIp", ip);
       sendClientHello();
     });
-  }, [sendClientHello]);
+  }, [authRequired, sendClientHello]);
 
   useEffect(() => {
     if (!isConnected) {
@@ -509,6 +548,7 @@ export default function Index() {
         setIsConnected(true);
         connectAttemptRef.current = 0;
         setStatusText("Connected. Watching clipboard changes.");
+        setAuthGateLocked(false);
         sendClientHello();
       };
 
@@ -570,16 +610,25 @@ export default function Index() {
           return;
         }
         setIsConnected(false);
-        setStatusText("Disconnected. Reconnecting...");
+        setStatusText(authRequired ? "Disconnected. Reconnecting (check ACCESS_PIN if this persists)..." : "Disconnected. Reconnecting...");
+        setAuthGateLocked(authRequired);
         reconnectTimerRef.current = window.setTimeout(connect, 1_500);
       };
 
       socket.onerror = () => {
-        setStatusText("WebSocket error. Retrying...");
+        setStatusText(authRequired ? "WebSocket error or ACCESS_PIN rejected. Retrying..." : "WebSocket error. Retrying...");
       };
     };
 
     void refreshPermissionState();
+
+    if (authRequired && !accessTokenRef.current.trim()) {
+      setIsConnected(false);
+      setAuthGateLocked(true);
+      setStatusText("ACCESS_PIN required before this client can join sync.");
+      return;
+    }
+
     connect();
     clipboardPollRef.current = window.setInterval(() => {
       if (!document.hidden) {
@@ -602,7 +651,7 @@ export default function Index() {
       }
       wsRef.current = null;
     };
-  }, [applyRemoteClipboard, pollLocalClipboard, refreshPermissionState, sendClientHello, wsCandidates]);
+  }, [applyRemoteClipboard, authRequired, pollLocalClipboard, refreshPermissionState, sendClientHello, wsCandidates]);
 
   const handleEnableClipboard = useCallback(async () => {
     try {
@@ -651,6 +700,7 @@ export default function Index() {
     }
     const resolved = clientName.replace(/\s+/g, " ").trim().slice(0, 48) || makeDefaultClientName();
     const cleanedIp = deviceIp.trim();
+    const cleanedAccessToken = accessToken.trim();
     if (cleanedIp && !isValidClientIp(cleanedIp)) {
       setStatusText("Device IP must be a valid IPv4 address.");
       return;
@@ -661,13 +711,17 @@ export default function Index() {
     setDeviceIp(cleanedIp);
     window.localStorage.setItem("quickRelayClientName", resolved);
     window.localStorage.setItem("quickRelayDeviceIp", cleanedIp);
+    window.localStorage.setItem("quickRelayAccessToken", cleanedAccessToken);
+    accessTokenRef.current = cleanedAccessToken;
+    setAccessToken(cleanedAccessToken);
     sendClientHello();
     setStatusText("Client identity updated.");
-  }, [clientName, deviceIp, sendClientHello]);
+  }, [accessToken, clientName, deviceIp, sendClientHello]);
 
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
   const connectionBadgeVariant = isConnected ? "success" : "warning";
+  const accessBadgeVariant = !authRequired ? "outline" : authGateLocked ? "warning" : "success";
   const connectedClientCount = connectedClients.length;
 
   return (
@@ -689,6 +743,9 @@ export default function Index() {
                     : permissionLevel === "limited"
                       ? "Permission Prompt Needed"
                       : "Clipboard Access Blocked"}
+              </Badge>
+              <Badge variant={accessBadgeVariant}>
+                {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
               </Badge>
             </div>
             <CardTitle>QuickRelay</CardTitle>
@@ -718,7 +775,7 @@ export default function Index() {
               <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-3">
               <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
                 Client label
                 <input
@@ -735,6 +792,15 @@ export default function Index() {
                   onChange={(event) => setDeviceIp(event.target.value)}
                   className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
                   placeholder="e.g. 10.50.100.13"
+                />
+              </label>
+              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+                Access PIN (optional)
+                <input
+                  value={accessToken}
+                  onChange={(event) => setAccessToken(event.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                  placeholder="Enter ACCESS_PIN"
                 />
               </label>
             </div>
@@ -817,4 +883,3 @@ export default function Index() {
     </main>
   );
 }
-
