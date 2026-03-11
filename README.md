@@ -1,10 +1,10 @@
-# QuickRelay (Remix + shadcn-style UI)
+# QuickRelay
 
 Realtime text clipboard sync across devices on the same LAN.
 
 ## Recommended Architecture
 
-Run one server instance, then open that same URL from every PC.
+Run a single server instance and access it from any PC or mobile device on the same network.
 
 ```text
 http://<SERVER_LAN_IP>:3000
@@ -34,7 +34,7 @@ docker compose logs -f
 
 ## Important Environment Flags
 
-- `LOCAL_NODE_IP=10.50.100.13` force which IP is shown as local on that server.
+- `LOCAL_NODE_IP=10.50.100.13` force which IP is shown as local on that server. Change to your local IP
 - `DISCOVERY_ENABLED=false` keep single-server mode.
 - `CLUSTER_STATE_INTERVAL_MS=1500` client/health UI refresh interval.
 - `WS_PUBLIC_PATH=/ws` for reverse-proxy websocket path on same HTTPS domain.
@@ -67,5 +67,5 @@ App config:
 - Textbox syncing still works even when direct clipboard read/write is blocked.
 - If a client IP resolves to a Docker bridge address, set `Device IP` in the UI and save identity.
 - For full clipboard read/write on remote devices, use HTTPS (or localhost).
-- ACCESS_PIN is sent as a websocket query param over your transport, so prefer HTTPS/WSS when possible.
+- ACCESS_PIN is sent as a websocket query param over your transport, so prefer HTTPS/WSS when possible. 
 

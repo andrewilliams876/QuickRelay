@@ -305,6 +305,7 @@ export default function Index() {
   const [deviceIp, setDeviceIp] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [authGateLocked, setAuthGateLocked] = useState(authRequired);
+  const [showAccessPin, setShowAccessPin] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -319,11 +320,18 @@ export default function Index() {
   const lastTimestampByClientRef = useRef(new Map<string, number>());
 
   const wsUrl = useMemo(() => {
-    return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl, accessToken });
-  }, [accessToken, wsPort, wsPublicPath, wsPublicUrl]);
+    const effectiveAccessToken = authRequired ? accessToken : "";
+    return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl, accessToken: effectiveAccessToken });
+  }, [accessToken, authRequired, wsPort, wsPublicPath, wsPublicUrl]);
   const wsCandidates = useMemo(() => {
-    return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl, accessToken });
-  }, [accessToken, wsPort, wsPublicPath, wsPublicUrl]);
+    const effectiveAccessToken = authRequired ? accessToken : "";
+    return buildWebSocketCandidates({
+      wsPort,
+      wsPublicPath,
+      wsPublicUrl,
+      accessToken: effectiveAccessToken
+    });
+  }, [accessToken, authRequired, wsPort, wsPublicPath, wsPublicUrl]);
   const connectAttemptRef = useRef(0);
   const [activeWsUrl, setActiveWsUrl] = useState("");
 
@@ -418,6 +426,13 @@ export default function Index() {
     }
     sendClientHello();
   }, [isConnected, sendClientHello]);
+
+  useEffect(() => {
+    if (authRequired) {
+      return;
+    }
+    setShowAccessPin(false);
+  }, [authRequired]);
 
   const refreshPermissionState = useCallback(async () => {
     if (typeof navigator === "undefined") {
@@ -775,8 +790,8 @@ export default function Index() {
               <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+            <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 Client label
                 <input
                   value={clientName}
@@ -785,7 +800,7 @@ export default function Index() {
                   placeholder="Set a client name"
                 />
               </label>
-              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 Device IP (optional)
                 <input
                   value={deviceIp}
@@ -794,20 +809,46 @@ export default function Index() {
                   placeholder="e.g. 10.50.100.13"
                 />
               </label>
-              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2 lg:col-span-1">
                 Access PIN (optional)
-                <input
-                  value={accessToken}
-                  onChange={(event) => setAccessToken(event.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
-                  placeholder="Enter ACCESS_PIN"
-                />
+                <div className="relative">
+                  <input
+                    type={showAccessPin ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={authRequired ? accessToken : ""}
+                    disabled={!authRequired}
+                    onChange={(event) => setAccessToken(event.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 text-sm text-foreground disabled:cursor-not-allowed disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-70"
+                    placeholder={authRequired ? "Enter ACCESS_PIN" : "Disabled (ACCESS_PIN not set)"}
+                  />
+                  <button
+                    type="button"
+                    aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
+                    disabled={!authRequired}
+                    onClick={() => setShowAccessPin((value) => !value)}
+                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {showAccessPin ? (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.6 10.6a2 2 0 002.8 2.8" />
+                        <path d="M9.9 4.2A10.5 10.5 0 0112 4c7 0 10 8 10 8a16.4 16.4 0 01-4 5.3" />
+                        <path d="M6.6 6.6A16.8 16.8 0 002 12s3 8 10 8a9.9 9.9 0 004.2-.9" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </label>
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" variant="outline" onClick={handleSaveClientName}>
-                Save Client Identity
-              </Button>
+              <div className="sm:col-span-2 lg:col-span-1">
+                <Button className="w-full lg:w-auto" size="sm" variant="secondary" onClick={handleSaveClientName}>
+                  Save Client Identity
+                </Button>
+              </div>
             </div>
           </CardContent>
           <CardFooter className="flex flex-wrap gap-3">
