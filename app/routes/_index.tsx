@@ -61,7 +61,7 @@ type PermissionLevel = "checking" | "granted" | "limited" | "blocked";
 type WsInboundMessage = ClipboardUpdateMessage | ClusterStateMessage;
 
 export const meta: MetaFunction = () => {
-  return [{ title: "LAN Clipboard | Sync Text Between PCs" }];
+  return [{ title: "QuickRelay | Sync Text Between PCs" }];
 };
 
 export async function loader() {
@@ -187,7 +187,7 @@ async function detectDeviceIp(): Promise<string | null> {
     }, 1800);
 
     const pc = new rtcCtor({ iceServers: [] });
-    pc.createDataChannel("lan-clipboard");
+    pc.createDataChannel("quickrelay");
 
     const captureIps = (text: string | null | undefined) => {
       if (!text) {
@@ -350,13 +350,13 @@ export default function Index() {
       setClientId(clientIdRef.current);
     }
 
-    const stored = window.localStorage.getItem("lanClipboardClientName");
+    const stored = window.localStorage.getItem("quickRelayClientName") ?? window.localStorage.getItem("lanClipboardClientName");
     const resolvedName = stored && stored.trim() ? stored.trim() : makeDefaultClientName();
     clientNameRef.current = resolvedName;
     setClientName(resolvedName);
-    window.localStorage.setItem("lanClipboardClientName", resolvedName);
+    window.localStorage.setItem("quickRelayClientName", resolvedName);
 
-    const storedIp = window.localStorage.getItem("lanClipboardDeviceIp") ?? "";
+    const storedIp = window.localStorage.getItem("quickRelayDeviceIp") ?? window.localStorage.getItem("lanClipboardDeviceIp") ?? "";
     if (storedIp && isValidClientIp(storedIp)) {
       deviceIpRef.current = storedIp;
       setDeviceIp(storedIp);
@@ -368,7 +368,7 @@ export default function Index() {
       }
       deviceIpRef.current = ip;
       setDeviceIp(ip);
-      window.localStorage.setItem("lanClipboardDeviceIp", ip);
+      window.localStorage.setItem("quickRelayDeviceIp", ip);
       sendClientHello();
     });
   }, [sendClientHello]);
@@ -659,8 +659,8 @@ export default function Index() {
     deviceIpRef.current = cleanedIp;
     setClientName(resolved);
     setDeviceIp(cleanedIp);
-    window.localStorage.setItem("lanClipboardClientName", resolved);
-    window.localStorage.setItem("lanClipboardDeviceIp", cleanedIp);
+    window.localStorage.setItem("quickRelayClientName", resolved);
+    window.localStorage.setItem("quickRelayDeviceIp", cleanedIp);
     sendClientHello();
     setStatusText("Client identity updated.");
   }, [clientName, deviceIp, sendClientHello]);
@@ -691,7 +691,7 @@ export default function Index() {
                       : "Clipboard Access Blocked"}
               </Badge>
             </div>
-            <CardTitle>LAN Clipboard</CardTitle>
+            <CardTitle>QuickRelay</CardTitle>
             <CardDescription>
               Copy text on one machine, it syncs over websocket, and applies on connected clients.
             </CardDescription>
@@ -817,3 +817,4 @@ export default function Index() {
     </main>
   );
 }
+

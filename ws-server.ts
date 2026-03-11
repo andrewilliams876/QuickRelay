@@ -831,7 +831,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
   outboundPeers.set(peerKey, socket);
 
   socket.on("open", () => {
-    console.log(`[lan-clipboard] Connected peer ${peerKey}`);
+    console.log(`[quickrelay] Connected peer ${peerKey}`);
     sendJson(socket, { type: "peer_hello", serverId, wsPort } satisfies PeerHelloMessage);
     if (latestMessage) {
       sendJson(socket, latestMessage);
@@ -875,7 +875,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
   });
 
   socket.on("close", () => {
-    console.log(`[lan-clipboard] Peer closed ${peerKey}`);
+    console.log(`[quickrelay] Peer closed ${peerKey}`);
     if (outboundPeers.get(peerKey) === socket) {
       outboundPeers.delete(peerKey);
     }
@@ -884,7 +884,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
   });
 
   socket.on("error", () => {
-    console.log(`[lan-clipboard] Peer error ${peerKey}`);
+    console.log(`[quickrelay] Peer error ${peerKey}`);
     if (outboundPeers.get(peerKey) === socket) {
       outboundPeers.delete(peerKey);
     }
@@ -909,14 +909,14 @@ function sendDiscoveryHeartbeat() {
 
 function setupDiscovery() {
   if (!discoveryEnabled) {
-    console.log("[lan-clipboard] Discovery disabled.");
+    console.log("[quickrelay] Discovery disabled.");
     return;
   }
 
   discoverySocket = dgram.createSocket("udp4");
 
   discoverySocket.on("error", (error) => {
-    console.error("[lan-clipboard] UDP discovery error:", error);
+    console.error("[quickrelay] UDP discovery error:", error);
   });
 
   discoverySocket.on("message", (raw, remote) => {
@@ -940,7 +940,7 @@ function setupDiscovery() {
     ensurePeerMeta(peerKey, host, parsed.wsPort, { fromDiscovery: true });
     updatePeerMetaFromHello(peerKey, parsed.serverId);
 
-    console.log(`[lan-clipboard] Discovered peer ${parsed.serverId} at ${peerKey}`);
+    console.log(`[quickrelay] Discovered peer ${parsed.serverId} at ${peerKey}`);
     connectToPeer(host, parsed.wsPort, peerKey);
     broadcastClusterState();
   });
@@ -948,7 +948,7 @@ function setupDiscovery() {
   discoverySocket.bind(discoveryPort, "0.0.0.0", () => {
     discoverySocket?.setBroadcast(true);
     console.log(
-      `[lan-clipboard] Discovery enabled on udp://${discoveryBroadcast}:${discoveryPort} (server ${serverId})`
+      `[quickrelay] Discovery enabled on udp://${discoveryBroadcast}:${discoveryPort} (server ${serverId})`
     );
     sendDiscoveryHeartbeat();
     discoveryTimer = setInterval(sendDiscoveryHeartbeat, discoveryIntervalMs);
@@ -958,11 +958,11 @@ function setupDiscovery() {
 wsServer.on("connection", registerInboundSocketHandlers);
 
 wsServer.on("listening", () => {
-  console.log(`[lan-clipboard] WebSocket server listening on ws://${wsHost}:${wsPort} (server ${serverId})`);
+  console.log(`[quickrelay] WebSocket server listening on ws://${wsHost}:${wsPort} (server ${serverId})`);
 });
 
 wsServer.on("error", (error) => {
-  console.error("[lan-clipboard] WebSocket server error:", error);
+  console.error("[quickrelay] WebSocket server error:", error);
 });
 
 for (const seed of peerSeeds) {
@@ -974,7 +974,7 @@ cleanupTimer = setInterval(cleanupCaches, 30_000);
 clusterStateTimer = setInterval(broadcastClusterState, clusterStateIntervalMs);
 
 const shutdown = () => {
-  console.log("[lan-clipboard] Shutting down...");
+  console.log("[quickrelay] Shutting down...");
 
   if (discoveryTimer) {
     clearInterval(discoveryTimer);
@@ -1012,3 +1012,4 @@ const shutdown = () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+

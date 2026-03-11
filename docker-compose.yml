@@ -1,9 +1,9 @@
 services:
-  lan-clipboard:
+  quickrelay:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: lan-clipboard
+    container_name: quickrelay
     ports:
       - "3000:3000"
       - "3001:3001"
@@ -19,3 +19,4 @@ services:
       - SEEN_MESSAGE_TTL_MS=120000
       - CLUSTER_STATE_INTERVAL_MS=1500
     restart: unless-stopped
+
