@@ -4,6 +4,8 @@ import os from "node:os";
 
 import { WebSocket, WebSocketServer } from "ws";
 
+import { issueWsAccessToken, verifyWsAccessToken } from "./app/lib/access-token.server";
+
 type ClipboardUpdateMessage = {
   type: "clipboard_update";
   text: string;
@@ -243,7 +245,7 @@ function isAuthorizedWsRequest(request: IncomingMessage) {
   try {
     const url = new URL(request.url ?? "/", `http://${hostHeader}`);
     const token = (url.searchParams.get("token") ?? "").trim();
-    return token.length > 0 && token === accessPin;
+    return token.length > 0 && verifyWsAccessToken(token, accessPin);
   } catch {
     return false;
   }
@@ -811,7 +813,10 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
 function buildPeerWebSocketUrl(host: string, port: number) {
   const url = new URL(`ws://${host}:${port}`);
   if (authRequired) {
-    url.searchParams.set("token", accessPin);
+    const peerToken = issueWsAccessToken(accessPin, { audience: "peer" });
+    if (peerToken) {
+      url.searchParams.set("token", peerToken);
+    }
   }
   return url.toString();
 }

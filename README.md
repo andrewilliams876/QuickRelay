@@ -17,7 +17,7 @@ No peer discovery or cross-server linking is required for this mode.
 - Shared clipboard textbox sync for all connected clients.
 - Per-client identity (`name + IP`) shown in Session Stats.
 - Local client rename support from the UI.
-- Optional ACCESS_PIN gate for LAN clients.
+- Optional ACCESS_PIN gate for LAN clients with an in-app PIN dialog.
 - Dockerized deployment.
 
 ## Quick Start
@@ -39,7 +39,7 @@ docker compose logs -f
 - `CLUSTER_STATE_INTERVAL_MS=1500` client/health UI refresh interval.
 - `WS_PUBLIC_PATH=/ws` for reverse-proxy websocket path on same HTTPS domain.
 - `WS_PUBLIC_URL=wss://quickrelay.example.com/ws` optional explicit websocket URL override.
-- `ACCESS_PIN=your-secret` optional websocket passphrase. Clients must provide the same PIN to join sync (stored in browser localStorage).
+- `ACCESS_PIN=your-secret` optional websocket passphrase. Clients enter it in the app dialog and receive a short-lived signed access token (PIN itself is not stored).
 - Direct IP access is still supported: `http://<server-ip>:3000` will automatically use `ws://<server-ip>:3001`.
 
 ## Reverse Proxy (Nginx Proxy Manager)
@@ -67,5 +67,5 @@ App config:
 - Textbox syncing still works even when direct clipboard read/write is blocked.
 - If a client IP resolves to a Docker bridge address, set `Device IP` in the UI and save identity.
 - For full clipboard read/write on remote devices, use HTTPS (or localhost).
-- ACCESS_PIN is sent as a websocket query param over your transport, so prefer HTTPS/WSS when possible. 
+- WebSocket auth uses a signed short-lived token in the query string, so still prefer HTTPS/WSS to protect session tokens in transit.
 
