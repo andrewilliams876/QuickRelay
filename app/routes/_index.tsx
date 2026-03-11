@@ -25,20 +25,25 @@ type ClipboardUpdateMessage = {
   originServerId?: string;
 };
 
-type ClusterPeer = {
-  key: string;
-  host: string;
-  port: number;
-  serverId: string | null;
-  online: boolean;
-  lastSeen: number | null;
-};
-
 type ClusterLocalNode = {
   displayAddress: string;
   addresses: string[];
   wsPort: number;
   online: true;
+};
+
+type ClusterClient = {
+  clientId: string;
+  clientName: string;
+  ip: string;
+  connectedAt: number;
+  lastSeen: number;
+};
+
+type ClientHelloMessage = {
+  type: "client_hello";
+  clientId: string;
+  clientName: string;
 };
 
 type ClusterStateMessage = {
@@ -48,7 +53,7 @@ type ClusterStateMessage = {
   totalMessages: number;
   lastClipboardTimestamp: number | null;
   localNode: ClusterLocalNode;
-  peers: ClusterPeer[];
+  clients: ClusterClient[];
 };
 
 type PermissionLevel = "checking" | "granted" | "limited" | "blocked";
@@ -71,6 +76,15 @@ function makeClientId() {
   return `client-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+function makeDefaultClientName() {
+  const platform =
+    typeof navigator !== "undefined" && navigator.platform
+      ? navigator.platform.replace(/\s+/g, "")
+      : "Client";
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${platform}-${suffix}`;
+}
+
 export default function Index() {
   const { wsPort } = useLoaderData<typeof loader>();
 
@@ -83,9 +97,10 @@ export default function Index() {
   const [clusterMessagesSeen, setClusterMessagesSeen] = useState(0);
   const [clusterConnectedClients, setClusterConnectedClients] = useState(0);
   const [clusterServerId, setClusterServerId] = useState<string | null>(null);
-  const [peers, setPeers] = useState<ClusterPeer[]>([]);
+  const [connectedClients, setConnectedClients] = useState<ClusterClient[]>([]);
   const [localNode, setLocalNode] = useState<ClusterLocalNode | null>(null);
   const [clientId, setClientId] = useState("");
+  const [clientName, setClientName] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -93,6 +108,7 @@ export default function Index() {
   const lastClipboardRef = useRef("");
   const skipBroadcastUntilRef = useRef(0);
   const clientIdRef = useRef("");
+  const clientNameRef = useRef("");
   const lastUserEditAtRef = useRef(0);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
 
@@ -118,6 +134,49 @@ export default function Index() {
     ws.send(JSON.stringify(payload));
     setLocalMessagesSent((value) => value + 1);
   }, []);
+
+  const sendClientHello = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    if (!clientIdRef.current || !clientNameRef.current) {
+      return;
+    }
+    const payload: ClientHelloMessage = {
+      type: "client_hello",
+      clientId: clientIdRef.current,
+      clientName: clientNameRef.current
+    };
+    ws.send(JSON.stringify(payload));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (!clientIdRef.current) {
+      const id = makeClientId();
+      clientIdRef.current = id;
+      setClientId(id);
+    } else {
+      setClientId(clientIdRef.current);
+    }
+
+    const stored = window.localStorage.getItem("lanClipboardClientName");
+    const resolvedName = stored && stored.trim() ? stored.trim() : makeDefaultClientName();
+    clientNameRef.current = resolvedName;
+    setClientName(resolvedName);
+    window.localStorage.setItem("lanClipboardClientName", resolvedName);
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+    sendClientHello();
+  }, [isConnected, sendClientHello]);
 
   const refreshPermissionState = useCallback(async () => {
     if (typeof navigator === "undefined") {
@@ -235,6 +294,7 @@ export default function Index() {
         }
         setIsConnected(true);
         setStatusText("Connected. Watching clipboard changes.");
+        sendClientHello();
       };
 
       socket.onmessage = (event) => {
@@ -246,7 +306,9 @@ export default function Index() {
               typeof payload.connectedClients === "number" ? payload.connectedClients : 0
             );
             setClusterMessagesSeen(typeof payload.totalMessages === "number" ? payload.totalMessages : 0);
-            setPeers(Array.isArray(payload.peers) ? (payload.peers as ClusterPeer[]) : []);
+            setConnectedClients(
+              Array.isArray(payload.clients) ? (payload.clients as ClusterClient[]) : []
+            );
             const incomingLocal = payload.localNode as Partial<ClusterLocalNode> | undefined;
             if (
               incomingLocal &&
@@ -303,11 +365,6 @@ export default function Index() {
     };
 
     void refreshPermissionState();
-    if (!clientIdRef.current) {
-      const id = makeClientId();
-      clientIdRef.current = id;
-      setClientId(id);
-    }
     connect();
     clipboardPollRef.current = window.setInterval(() => {
       if (!document.hidden) {
@@ -330,7 +387,7 @@ export default function Index() {
       }
       wsRef.current = null;
     };
-  }, [applyRemoteClipboard, pollLocalClipboard, refreshPermissionState, wsUrl]);
+  }, [applyRemoteClipboard, pollLocalClipboard, refreshPermissionState, sendClientHello, wsUrl]);
 
   const handleEnableClipboard = useCallback(async () => {
     try {
@@ -364,20 +421,31 @@ export default function Index() {
           await navigator.clipboard.writeText(value);
         }
       } catch {
-        setStatusText("Shared to peers, but clipboard write is blocked locally.");
+        setStatusText("Shared to connected clients, but clipboard write is blocked locally.");
       }
 
       sendClipboard(value);
-      setStatusText("Shared text to LAN peers.");
+      setStatusText("Shared text to connected clients.");
     },
     [sendClipboard]
   );
 
+  const handleSaveClientName = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const resolved = clientName.replace(/\s+/g, " ").trim().slice(0, 48) || makeDefaultClientName();
+    clientNameRef.current = resolved;
+    setClientName(resolved);
+    window.localStorage.setItem("lanClipboardClientName", resolved);
+    sendClientHello();
+    setStatusText("Client identity updated.");
+  }, [clientName, sendClientHello]);
+
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
   const connectionBadgeVariant = isConnected ? "success" : "warning";
-  const totalNodes = peers.length + (localNode ? 1 : 0);
-  const onlineNodes = peers.filter((peer) => peer.online).length + (localNode ? 1 : 0);
+  const connectedClientCount = connectedClients.length;
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
@@ -402,7 +470,7 @@ export default function Index() {
             </div>
             <CardTitle>LAN Clipboard</CardTitle>
             <CardDescription>
-              Copy text on one machine, it syncs over websocket, and applies on connected peers.
+              Copy text on one machine, it syncs over websocket, and applies on connected clients.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -422,8 +490,23 @@ export default function Index() {
               <div className="mt-1">
                 Local IP: {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
               </div>
+              <div className="mt-1">Client name: {clientName || "initializing..."}</div>
               <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+                Client label
+                <input
+                  value={clientName}
+                  onChange={(event) => setClientName(event.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                  placeholder="Set a client name"
+                />
+              </label>
+              <Button size="sm" variant="outline" onClick={handleSaveClientName}>
+                Save Name
+              </Button>
             </div>
           </CardContent>
           <CardFooter className="flex flex-wrap gap-3">
@@ -439,7 +522,7 @@ export default function Index() {
         <Card>
           <CardHeader>
             <CardTitle className="text-xl">Session Stats</CardTitle>
-            <CardDescription>Live health for this node and connected peers.</CardDescription>
+            <CardDescription>Live health for this server and connected clients.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
@@ -453,14 +536,14 @@ export default function Index() {
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Clients on this node</span>
+              <span className="text-muted-foreground">Clients on this server</span>
               <span className="font-mono text-foreground">{clusterConnectedClients}</span>
             </div>
             <Separator />
             <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Nodes online</span>
+              <span className="text-muted-foreground">Clients connected</span>
               <span className="font-mono text-foreground">
-                {onlineNodes}/{totalNodes}
+                {connectedClientCount}
               </span>
             </div>
             <Separator />
@@ -470,32 +553,20 @@ export default function Index() {
             </div>
             <Separator />
             <div className="space-y-2">
-              <p className="text-muted-foreground">Connected nodes</p>
-              {!localNode && peers.length === 0 ? (
-                <p className="text-xs text-foreground/90">No peers discovered yet.</p>
+              <p className="text-muted-foreground">Connected clients</p>
+              {connectedClients.length === 0 ? (
+                <p className="text-xs text-foreground/90">No connected clients yet.</p>
               ) : (
                 <ul className="space-y-1">
-                  {localNode ? (
-                    <li className="flex items-center justify-between text-xs">
+                  {connectedClients.map((entry) => (
+                    <li key={`${entry.clientId}-${entry.ip}`} className="flex items-center justify-between text-xs">
                       <span className="inline-flex items-center gap-2 font-mono">
                         <span className="inline-block h-2 w-2 rounded-full bg-success" />
-                        {localNode.displayAddress}:{localNode.wsPort}
+                        {entry.clientName}
                       </span>
-                      <span className="text-success">connected (local)</span>
-                    </li>
-                  ) : null}
-                  {peers.map((peer) => (
-                    <li key={peer.key} className="flex items-center justify-between text-xs">
-                      <span className="inline-flex items-center gap-2 font-mono">
-                        <span
-                          className={`inline-block h-2 w-2 rounded-full ${
-                            peer.online ? "bg-success" : "bg-warning"
-                          }`}
-                        />
-                        {peer.host}:{peer.port}
-                      </span>
-                      <span className={peer.online ? "text-success" : "text-warning"}>
-                        {peer.online ? "connected" : "offline"}
+                      <span className="text-success">
+                        {entry.ip}
+                        {entry.clientId === clientId ? " (you)" : ""}
                       </span>
                     </li>
                   ))}

@@ -24,6 +24,12 @@ type PeerHelloMessage = {
   wsPort?: number;
 };
 
+type ClientHelloMessage = {
+  type: "client_hello";
+  clientId: string;
+  clientName: string;
+};
+
 type DiscoveryPacket = {
   type: "lan_clipboard_discovery";
   serverId: string;
@@ -47,6 +53,14 @@ type LocalNodeSnapshot = {
   online: true;
 };
 
+type ClientSnapshot = {
+  clientId: string;
+  clientName: string;
+  ip: string;
+  connectedAt: number;
+  lastSeen: number;
+};
+
 type ClusterStateMessage = {
   type: "cluster_state";
   serverId: string;
@@ -54,6 +68,7 @@ type ClusterStateMessage = {
   totalMessages: number;
   lastClipboardTimestamp: number | null;
   localNode: LocalNodeSnapshot;
+  clients: ClientSnapshot[];
   peers: PeerSnapshot[];
 };
 
@@ -69,9 +84,17 @@ type PeerMeta = {
   fromDiscovery: boolean;
 };
 
+type ClientMeta = {
+  clientId: string;
+  clientName: string;
+  ip: string;
+  connectedAt: number;
+  lastSeen: number;
+};
+
 const wsPort = Number(process.env.WS_PORT ?? 3001);
 const wsHost = process.env.WS_HOST ?? "0.0.0.0";
-const discoveryEnabled = process.env.DISCOVERY_ENABLED !== "false";
+const discoveryEnabled = process.env.DISCOVERY_ENABLED === "true";
 const discoveryPort = Number(process.env.DISCOVERY_PORT ?? 4001);
 const discoveryBroadcast = process.env.DISCOVERY_BROADCAST ?? "255.255.255.255";
 const discoveryIntervalMs = Number(process.env.DISCOVERY_INTERVAL_MS ?? 3000);
@@ -113,6 +136,7 @@ const discoveredPeers = new Map<
   { serverId: string; host: string; port: number; lastSeen: number; key: string }
 >();
 const peerMetadata = new Map<string, PeerMeta>();
+const clientMetadata = new Map<WebSocket, ClientMeta>();
 const seenMessages = new Map<string, number>();
 
 for (const seed of peerSeeds) {
@@ -143,6 +167,31 @@ function normalizeAddress(raw: string) {
     return "127.0.0.1";
   }
   return raw;
+}
+
+function sanitizeClientName(raw: string) {
+  const cleaned = raw.replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return "Unnamed Client";
+  }
+  return cleaned.slice(0, 48);
+}
+
+function getRemoteIp(request: IncomingMessage) {
+  const forwarded = request.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) {
+      return normalizeAddress(first);
+    }
+  }
+  if (Array.isArray(forwarded) && forwarded.length > 0) {
+    const first = forwarded[0]?.split(",")[0]?.trim();
+    if (first) {
+      return normalizeAddress(first);
+    }
+  }
+  return normalizeAddress(request.socket.remoteAddress ?? "unknown");
 }
 
 function isLikelyVirtualOrBridgeAddress(ip: string) {
@@ -220,6 +269,9 @@ function getResolvedLocalAddresses() {
 }
 
 function shouldUseAliasAddress(host: string) {
+  if (!host || host === "unknown") {
+    return false;
+  }
   if (localNodeIpOverride) {
     return host === localNodeIpOverride;
   }
@@ -231,7 +283,7 @@ function shouldUseAliasAddress(host: string) {
 
 function markPeerAsLocalAlias(host: string, port: number) {
   const normalizedHost = normalizeAddress(host);
-  if (!normalizedHost) {
+  if (!normalizedHost || normalizedHost === "unknown") {
     return;
   }
   if (port === wsPort && shouldUseAliasAddress(normalizedHost)) {
@@ -290,6 +342,18 @@ function isPeerHelloMessage(input: unknown): input is PeerHelloMessage {
   }
   const payload = input as Partial<PeerHelloMessage>;
   return payload.type === "peer_hello" && typeof payload.serverId === "string";
+}
+
+function isClientHelloMessage(input: unknown): input is ClientHelloMessage {
+  if (typeof input !== "object" || input === null) {
+    return false;
+  }
+  const payload = input as Partial<ClientHelloMessage>;
+  return (
+    payload.type === "client_hello" &&
+    typeof payload.clientId === "string" &&
+    typeof payload.clientName === "string"
+  );
 }
 
 function isDiscoveryPacket(input: unknown): input is DiscoveryPacket {
@@ -393,12 +457,36 @@ function sendJson(socket: WebSocket, payload: unknown) {
 
 function getConnectedClientCount() {
   let count = 0;
-  for (const socket of inboundSockets) {
-    if (socketRoles.get(socket) === "client" && socket.readyState === WebSocket.OPEN) {
+  for (const [socket] of clientMetadata) {
+    if (socket.readyState === WebSocket.OPEN && socketRoles.get(socket) === "client") {
       count += 1;
     }
   }
   return count;
+}
+
+function getClientSnapshots(): ClientSnapshot[] {
+  const snapshots: ClientSnapshot[] = [];
+  for (const [socket, meta] of clientMetadata) {
+    if (socketRoles.get(socket) !== "client" || socket.readyState !== WebSocket.OPEN) {
+      continue;
+    }
+    snapshots.push({
+      clientId: meta.clientId,
+      clientName: meta.clientName,
+      ip: meta.ip,
+      connectedAt: meta.connectedAt,
+      lastSeen: meta.lastSeen
+    });
+  }
+  snapshots.sort((left, right) => {
+    const byName = left.clientName.localeCompare(right.clientName);
+    if (byName !== 0) {
+      return byName;
+    }
+    return left.ip.localeCompare(right.ip);
+  });
+  return snapshots;
 }
 
 function isPeerMetaOnline(meta: PeerMeta) {
@@ -479,6 +567,7 @@ function buildClusterState(): ClusterStateMessage {
       wsPort,
       online: true
     },
+    clients: getClientSnapshots(),
     peers: getPeerSnapshots()
   };
 }
@@ -553,12 +642,23 @@ function cleanupSocket(socket: WebSocket) {
   inboundSockets.delete(socket);
   socketRoles.delete(socket);
   peerSocketIds.delete(socket);
+  clientMetadata.delete(socket);
   broadcastClusterState();
 }
 
 function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessage) {
+  const remoteIp = getRemoteIp(request);
+  const connectedAt = Date.now();
+
   inboundSockets.add(socket);
   socketRoles.set(socket, "client");
+  clientMetadata.set(socket, {
+    clientId: `anon-${makeId()}`,
+    clientName: "Unnamed Client",
+    ip: remoteIp,
+    connectedAt,
+    lastSeen: connectedAt
+  });
 
   if (latestMessage) {
     sendJson(socket, latestMessage);
@@ -574,7 +674,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
 
     if (isPeerHelloMessage(parsed)) {
       if (parsed.serverId === serverId) {
-        const remoteHost = normalizeAddress(request.socket.remoteAddress ?? "");
+        const remoteHost = remoteIp;
         const remoteWsPort = typeof parsed.wsPort === "number" ? parsed.wsPort : wsPort;
         markPeerAsLocalAlias(remoteHost, remoteWsPort);
         broadcastClusterState();
@@ -582,7 +682,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
         return;
       }
 
-      const remoteHost = normalizeAddress(request.socket.remoteAddress ?? "");
+      const remoteHost = remoteIp;
       const remoteWsPort = typeof parsed.wsPort === "number" ? parsed.wsPort : wsPort;
       const peerKey = `${remoteHost}:${remoteWsPort}`;
       ensurePeerMeta(peerKey, remoteHost, remoteWsPort);
@@ -597,6 +697,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
       });
 
       socketRoles.set(socket, "peer");
+      clientMetadata.delete(socket);
       peerSocketIds.set(socket, parsed.serverId);
       sendJson(socket, { type: "peer_hello", serverId, wsPort } satisfies PeerHelloMessage);
       if (latestMessage) {
@@ -606,8 +707,29 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
       return;
     }
 
+    if (isClientHelloMessage(parsed)) {
+      if (socketRoles.get(socket) !== "client") {
+        return;
+      }
+      const existing = clientMetadata.get(socket);
+      if (!existing) {
+        return;
+      }
+      existing.clientId = parsed.clientId;
+      existing.clientName = sanitizeClientName(parsed.clientName);
+      existing.lastSeen = Date.now();
+      broadcastClusterState();
+      return;
+    }
+
     if (!isClipboardUpdateMessage(parsed)) {
       return;
+    }
+
+    const existing = clientMetadata.get(socket);
+    if (existing) {
+      existing.clientId = parsed.clientId || existing.clientId;
+      existing.lastSeen = Date.now();
     }
 
     if (parsed.originServerId) {
