@@ -44,6 +44,7 @@ type ClientHelloMessage = {
   type: "client_hello";
   clientId: string;
   clientName: string;
+  clientIpHint?: string;
 };
 
 type ClusterStateMessage = {
@@ -65,8 +66,90 @@ export const meta: MetaFunction = () => {
 
 export async function loader() {
   return json({
-    wsPort: process.env.WS_PORT ?? "3001"
+    wsPort: process.env.WS_PORT ?? "3001",
+    wsPublicPath: process.env.WS_PUBLIC_PATH ?? "",
+    wsPublicUrl: process.env.WS_PUBLIC_URL ?? ""
   });
+}
+
+function resolveWebSocketUrl({
+  wsPort,
+  wsPublicPath,
+  wsPublicUrl
+}: {
+  wsPort: string;
+  wsPublicPath: string;
+  wsPublicUrl: string;
+}) {
+  return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl })[0] ?? "";
+}
+
+function isIpv4Host(hostname: string) {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) {
+    return false;
+  }
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) {
+      return false;
+    }
+    const value = Number(part);
+    return value >= 0 && value <= 255;
+  });
+}
+
+function isDirectHost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || isIpv4Host(hostname);
+}
+
+function buildWebSocketCandidates({
+  wsPort,
+  wsPublicPath,
+  wsPublicUrl
+}: {
+  wsPort: string;
+  wsPublicPath: string;
+  wsPublicUrl: string;
+}) {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  const trimmedPublicUrl = wsPublicUrl.trim();
+  if (trimmedPublicUrl) {
+    if (trimmedPublicUrl.startsWith("ws://") || trimmedPublicUrl.startsWith("wss://")) {
+      candidates.push(trimmedPublicUrl);
+      return candidates;
+    }
+    if (trimmedPublicUrl.startsWith("http://")) {
+      candidates.push(`ws://${trimmedPublicUrl.slice("http://".length)}`);
+      return candidates;
+    }
+    if (trimmedPublicUrl.startsWith("https://")) {
+      candidates.push(`wss://${trimmedPublicUrl.slice("https://".length)}`);
+      return candidates;
+    }
+    candidates.push(trimmedPublicUrl);
+    return candidates;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const directUrl = `${protocol}://${window.location.hostname}:${wsPort}`;
+  const trimmedPublicPath = wsPublicPath.trim();
+  if (trimmedPublicPath && !isDirectHost(window.location.hostname)) {
+    const normalizedPath = trimmedPublicPath.startsWith("/")
+      ? trimmedPublicPath
+      : `/${trimmedPublicPath}`;
+    candidates.push(`${protocol}://${window.location.host}${normalizedPath}`);
+    if (!candidates.includes(directUrl)) {
+      candidates.push(directUrl);
+    }
+    return candidates;
+  }
+
+  candidates.push(directUrl);
+  return candidates;
 }
 
 function makeClientId() {
@@ -85,8 +168,107 @@ function makeDefaultClientName() {
   return `${platform}-${suffix}`;
 }
 
+async function detectDeviceIp(): Promise<string | null> {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const rtcCtor =
+    (window as unknown as { RTCPeerConnection?: typeof RTCPeerConnection }).RTCPeerConnection ??
+    (window as unknown as { webkitRTCPeerConnection?: typeof RTCPeerConnection }).webkitRTCPeerConnection;
+  if (!rtcCtor) {
+    return null;
+  }
+
+  return new Promise<string | null>((resolve) => {
+    const ips = new Set<string>();
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(selectBestIp(Array.from(ips)));
+    }, 1800);
+
+    const pc = new rtcCtor({ iceServers: [] });
+    pc.createDataChannel("lan-clipboard");
+
+    const captureIps = (text: string | null | undefined) => {
+      if (!text) {
+        return;
+      }
+      const regex = /(\d{1,3}(?:\.\d{1,3}){3})/g;
+      const matches = text.match(regex) ?? [];
+      for (const candidate of matches) {
+        if (isValidClientIp(candidate)) {
+          ips.add(candidate);
+        }
+      }
+    };
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      pc.onicecandidate = null;
+      pc.close();
+    };
+
+    pc.onicecandidate = (event) => {
+      captureIps(event.candidate?.candidate);
+      if (!event.candidate) {
+        cleanup();
+        resolve(selectBestIp(Array.from(ips)));
+      }
+    };
+
+    void pc
+      .createOffer()
+      .then((offer) => pc.setLocalDescription(offer))
+      .then(() => {
+        captureIps(pc.localDescription?.sdp);
+      })
+      .catch(() => {
+        cleanup();
+        resolve(null);
+      });
+  });
+}
+
+function isValidClientIp(raw: string) {
+  const value = raw.trim();
+  const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/);
+  if (!match) {
+    return false;
+  }
+  const octets = value.split(".").map((part) => Number(part));
+  if (octets.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  if (value === "0.0.0.0" || value.startsWith("127.") || value.startsWith("169.254.")) {
+    return false;
+  }
+  return true;
+}
+
+function scoreIp(ip: string) {
+  if (ip.startsWith("10.")) {
+    return 50;
+  }
+  if (ip.startsWith("192.168.")) {
+    return 45;
+  }
+  const secondOctet = Number(ip.split(".")[1] ?? "0");
+  if (ip.startsWith("172.") && secondOctet >= 16 && secondOctet <= 31) {
+    return 40;
+  }
+  return 20;
+}
+
+function selectBestIp(ips: string[]) {
+  if (ips.length === 0) {
+    return null;
+  }
+  const sorted = [...ips].sort((left, right) => scoreIp(right) - scoreIp(left));
+  return sorted[0] ?? null;
+}
+
 export default function Index() {
-  const { wsPort } = useLoaderData<typeof loader>();
+  const { wsPort, wsPublicPath, wsPublicUrl } = useLoaderData<typeof loader>();
 
   const [clipboardText, setClipboardText] = useState("");
   const [statusText, setStatusText] = useState("Connecting to LAN sync server...");
@@ -101,6 +283,7 @@ export default function Index() {
   const [localNode, setLocalNode] = useState<ClusterLocalNode | null>(null);
   const [clientId, setClientId] = useState("");
   const [clientName, setClientName] = useState("");
+  const [deviceIp, setDeviceIp] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -109,16 +292,18 @@ export default function Index() {
   const skipBroadcastUntilRef = useRef(0);
   const clientIdRef = useRef("");
   const clientNameRef = useRef("");
+  const deviceIpRef = useRef("");
   const lastUserEditAtRef = useRef(0);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
 
   const wsUrl = useMemo(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${protocol}://${window.location.hostname}:${wsPort}`;
-  }, [wsPort]);
+    return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl });
+  }, [wsPort, wsPublicPath, wsPublicUrl]);
+  const wsCandidates = useMemo(() => {
+    return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl });
+  }, [wsPort, wsPublicPath, wsPublicUrl]);
+  const connectAttemptRef = useRef(0);
+  const [activeWsUrl, setActiveWsUrl] = useState("");
 
   const sendClipboard = useCallback((text: string) => {
     const ws = wsRef.current;
@@ -146,7 +331,8 @@ export default function Index() {
     const payload: ClientHelloMessage = {
       type: "client_hello",
       clientId: clientIdRef.current,
-      clientName: clientNameRef.current
+      clientName: clientNameRef.current,
+      clientIpHint: deviceIpRef.current || undefined
     };
     ws.send(JSON.stringify(payload));
   }, []);
@@ -169,7 +355,23 @@ export default function Index() {
     clientNameRef.current = resolvedName;
     setClientName(resolvedName);
     window.localStorage.setItem("lanClipboardClientName", resolvedName);
-  }, []);
+
+    const storedIp = window.localStorage.getItem("lanClipboardDeviceIp") ?? "";
+    if (storedIp && isValidClientIp(storedIp)) {
+      deviceIpRef.current = storedIp;
+      setDeviceIp(storedIp);
+    }
+
+    void detectDeviceIp().then((ip) => {
+      if (!ip) {
+        return;
+      }
+      deviceIpRef.current = ip;
+      setDeviceIp(ip);
+      window.localStorage.setItem("lanClipboardDeviceIp", ip);
+      sendClientHello();
+    });
+  }, [sendClientHello]);
 
   useEffect(() => {
     if (!isConnected) {
@@ -180,6 +382,10 @@ export default function Index() {
 
   const refreshPermissionState = useCallback(async () => {
     if (typeof navigator === "undefined") {
+      return;
+    }
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setPermissionLevel("limited");
       return;
     }
     if (!("permissions" in navigator) || !navigator.permissions?.query) {
@@ -239,6 +445,11 @@ export default function Index() {
   );
 
   const pollLocalClipboard = useCallback(async () => {
+    if (!window.isSecureContext) {
+      setPermissionLevel((current) => (current === "granted" ? current : "limited"));
+      setStatusText("Clipboard auto-read requires HTTPS (or localhost). Text sync still works.");
+      return;
+    }
     if (permissionLevel !== "granted") {
       return;
     }
@@ -274,7 +485,7 @@ export default function Index() {
   }, [permissionLevel, sendClipboard]);
 
   useEffect(() => {
-    if (!wsUrl) {
+    if (wsCandidates.length === 0) {
       return;
     }
 
@@ -285,7 +496,10 @@ export default function Index() {
         return;
       }
 
-      const socket = new WebSocket(wsUrl);
+      const targetUrl = wsCandidates[connectAttemptRef.current % wsCandidates.length] ?? wsCandidates[0];
+      connectAttemptRef.current += 1;
+      setActiveWsUrl(targetUrl);
+      const socket = new WebSocket(targetUrl);
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -293,6 +507,7 @@ export default function Index() {
           return;
         }
         setIsConnected(true);
+        connectAttemptRef.current = 0;
         setStatusText("Connected. Watching clipboard changes.");
         sendClientHello();
       };
@@ -387,13 +602,13 @@ export default function Index() {
       }
       wsRef.current = null;
     };
-  }, [applyRemoteClipboard, pollLocalClipboard, refreshPermissionState, sendClientHello, wsUrl]);
+  }, [applyRemoteClipboard, pollLocalClipboard, refreshPermissionState, sendClientHello, wsCandidates]);
 
   const handleEnableClipboard = useCallback(async () => {
     try {
       if (!navigator.clipboard?.readText || !navigator.clipboard?.writeText) {
-        setPermissionLevel("blocked");
-        setStatusText("Clipboard API is not available in this browser.");
+        setPermissionLevel("limited");
+        setStatusText("Clipboard API is limited on this page. Use HTTPS or localhost for full access.");
         return;
       }
       await navigator.clipboard.writeText(lastClipboardRef.current || "");
@@ -435,12 +650,20 @@ export default function Index() {
       return;
     }
     const resolved = clientName.replace(/\s+/g, " ").trim().slice(0, 48) || makeDefaultClientName();
+    const cleanedIp = deviceIp.trim();
+    if (cleanedIp && !isValidClientIp(cleanedIp)) {
+      setStatusText("Device IP must be a valid IPv4 address.");
+      return;
+    }
     clientNameRef.current = resolved;
+    deviceIpRef.current = cleanedIp;
     setClientName(resolved);
+    setDeviceIp(cleanedIp);
     window.localStorage.setItem("lanClipboardClientName", resolved);
+    window.localStorage.setItem("lanClipboardDeviceIp", cleanedIp);
     sendClientHello();
     setStatusText("Client identity updated.");
-  }, [clientName, sendClientHello]);
+  }, [clientName, deviceIp, sendClientHello]);
 
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
@@ -486,15 +709,16 @@ export default function Index() {
             />
             <div className="rounded-lg border border-border/70 bg-background/70 p-3 font-mono text-xs text-muted-foreground">
               <div>Status: {statusText}</div>
-              <div className="mt-1">WebSocket: {wsUrl || `ws://<host>:${wsPort}`}</div>
+              <div className="mt-1">WebSocket: {activeWsUrl || wsUrl || `ws://<host>:${wsPort}`}</div>
               <div className="mt-1">
-                Local IP: {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
+                Server IP: {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
               </div>
+              <div className="mt-1">This device IP: {deviceIp || "unavailable"}</div>
               <div className="mt-1">Client name: {clientName || "initializing..."}</div>
               <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
               <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
             </div>
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
                 Client label
                 <input
@@ -504,8 +728,19 @@ export default function Index() {
                   placeholder="Set a client name"
                 />
               </label>
+              <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs text-muted-foreground">
+                Device IP (optional)
+                <input
+                  value={deviceIp}
+                  onChange={(event) => setDeviceIp(event.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                  placeholder="e.g. 10.50.100.13"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end">
               <Button size="sm" variant="outline" onClick={handleSaveClientName}>
-                Save Name
+                Save Client Identity
               </Button>
             </div>
           </CardContent>
@@ -559,7 +794,10 @@ export default function Index() {
               ) : (
                 <ul className="space-y-1">
                   {connectedClients.map((entry) => (
-                    <li key={`${entry.clientId}-${entry.ip}`} className="flex items-center justify-between text-xs">
+                    <li
+                      key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`}
+                      className="flex items-center justify-between text-xs"
+                    >
                       <span className="inline-flex items-center gap-2 font-mono">
                         <span className="inline-block h-2 w-2 rounded-full bg-success" />
                         {entry.clientName}

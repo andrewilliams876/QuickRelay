@@ -28,6 +28,7 @@ type ClientHelloMessage = {
   type: "client_hello";
   clientId: string;
   clientName: string;
+  clientIpHint?: string;
 };
 
 type DiscoveryPacket = {
@@ -88,6 +89,7 @@ type ClientMeta = {
   clientId: string;
   clientName: string;
   ip: string;
+  ipObserved: string;
   connectedAt: number;
   lastSeen: number;
 };
@@ -175,6 +177,33 @@ function sanitizeClientName(raw: string) {
     return "Unnamed Client";
   }
   return cleaned.slice(0, 48);
+}
+
+function isValidIpv4(raw: string) {
+  const value = normalizeAddress(raw.trim());
+  const match = value.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) {
+    return false;
+  }
+  const octets = match.slice(1).map((part) => Number(part));
+  if (octets.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  if (value === "0.0.0.0" || value.startsWith("127.")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeClientIpHint(raw: unknown) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const value = normalizeAddress(raw);
+  if (!isValidIpv4(value)) {
+    return null;
+  }
+  return value;
 }
 
 function getRemoteIp(request: IncomingMessage) {
@@ -352,7 +381,8 @@ function isClientHelloMessage(input: unknown): input is ClientHelloMessage {
   return (
     payload.type === "client_hello" &&
     typeof payload.clientId === "string" &&
-    typeof payload.clientName === "string"
+    typeof payload.clientName === "string" &&
+    (payload.clientIpHint === undefined || typeof payload.clientIpHint === "string")
   );
 }
 
@@ -656,6 +686,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
     clientId: `anon-${makeId()}`,
     clientName: "Unnamed Client",
     ip: remoteIp,
+    ipObserved: remoteIp,
     connectedAt,
     lastSeen: connectedAt
   });
@@ -717,6 +748,8 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
       }
       existing.clientId = parsed.clientId;
       existing.clientName = sanitizeClientName(parsed.clientName);
+      const hintedIp = normalizeClientIpHint(parsed.clientIpHint);
+      existing.ip = hintedIp ?? existing.ipObserved;
       existing.lastSeen = Date.now();
       broadcastClusterState();
       return;
@@ -729,6 +762,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
     const existing = clientMetadata.get(socket);
     if (existing) {
       existing.clientId = parsed.clientId || existing.clientId;
+      existing.ip = normalizeClientIpHint((parsed as { clientIpHint?: unknown }).clientIpHint) ?? existing.ip;
       existing.lastSeen = Date.now();
     }
 

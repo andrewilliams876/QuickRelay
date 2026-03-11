@@ -12,6 +12,8 @@ services:
       - PORT=3000
       - WS_PORT=3001
       - WS_HOST=0.0.0.0
+      - WS_PUBLIC_PATH=/ws
+      - WS_PUBLIC_URL=
       - LOCAL_NODE_IP=10.50.100.13
       - DISCOVERY_ENABLED=false
       - SEEN_MESSAGE_TTL_MS=120000
