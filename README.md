@@ -39,6 +39,7 @@ http://<SERVER_LAN_IP>:3000
 ## Environment flags
 
 - `PEER_SEEDS=10.50.100.13:3001,10.50.100.6:3001` for deterministic peer linking
+- `LOCAL_NODE_IP=10.50.100.13` forces which IP is shown as local on that machine
 - `DISCOVERY_ENABLED=true` enables UDP auto-discovery
 - `CLUSTER_STATE_INTERVAL_MS=1500` controls peer/status UI refresh interval
 

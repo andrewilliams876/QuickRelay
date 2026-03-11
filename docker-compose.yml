@@ -13,6 +13,7 @@ services:
       - PORT=3000
       - WS_PORT=3001
       - WS_HOST=0.0.0.0
+      - LOCAL_NODE_IP=
       - DISCOVERY_ENABLED=true
       - DISCOVERY_PORT=4001
       - DISCOVERY_BROADCAST=255.255.255.255
@@ -21,5 +22,5 @@ services:
       - PEER_RECONNECT_MS=3000
       - SEEN_MESSAGE_TTL_MS=120000
       - CLUSTER_STATE_INTERVAL_MS=1500
-      - PEER_SEEDS=10.50.100.13:3001,10.50.100.6:3001
+      - PEER_SEEDS=10.50.100.6:3001
     restart: unless-stopped

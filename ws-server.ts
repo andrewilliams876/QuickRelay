@@ -80,7 +80,8 @@ const peerReconnectMs = Number(process.env.PEER_RECONNECT_MS ?? 3000);
 const seenMessageTtlMs = Number(process.env.SEEN_MESSAGE_TTL_MS ?? 120000);
 const clusterStateIntervalMs = Number(process.env.CLUSTER_STATE_INTERVAL_MS ?? 1500);
 const serverId = process.env.SERVER_ID ?? makeId();
-const localNodeAddresses = getLocalNodeAddresses();
+const localNodeIpOverride = normalizeAddress((process.env.LOCAL_NODE_IP ?? "").trim()) || null;
+const localNodeAddresses = getLocalNodeAddresses(localNodeIpOverride);
 const localAddressSet = new Set(localNodeAddresses);
 const localNodeAliases = new Set<string>();
 
@@ -144,7 +145,19 @@ function normalizeAddress(raw: string) {
   return raw;
 }
 
-function getLocalNodeAddresses() {
+function isLikelyVirtualOrBridgeAddress(ip: string) {
+  if (/^192\.168\.65\./.test(ip)) {
+    return true;
+  }
+  const match = ip.match(/^172\.(\d{1,3})\./);
+  if (!match) {
+    return false;
+  }
+  const segment = Number(match[1]);
+  return Number.isInteger(segment) && segment >= 16 && segment <= 31;
+}
+
+function getLocalNodeAddresses(overrideIp: string | null) {
   const addresses = new Set<string>();
   const interfaces = os.networkInterfaces();
   for (const entries of Object.values(interfaces)) {
@@ -158,13 +171,25 @@ function getLocalNodeAddresses() {
       addresses.add(normalizeAddress(entry.address));
     }
   }
+  if (overrideIp) {
+    addresses.add(overrideIp);
+  }
   if (addresses.size === 0) {
     addresses.add("127.0.0.1");
   }
   return Array.from(addresses).sort();
 }
 
-function pickLocalAddress(addresses: string[]) {
+function pickLocalAddress(addresses: string[], overrideIp: string | null) {
+  if (overrideIp) {
+    return overrideIp;
+  }
+  const preferred = addresses.find(
+    (value) => value !== "127.0.0.1" && !isLikelyVirtualOrBridgeAddress(value)
+  );
+  if (preferred) {
+    return preferred;
+  }
   const nonLoopback = addresses.find((value) => value !== "127.0.0.1");
   return nonLoopback ?? addresses[0] ?? "127.0.0.1";
 }
@@ -176,15 +201,32 @@ function isSelfSeed(host: string, port: number) {
   if (host === "localhost") {
     return true;
   }
-  return localAddressSet.has(normalizeAddress(host));
+  const normalizedHost = normalizeAddress(host);
+  if (localNodeIpOverride && normalizedHost === localNodeIpOverride) {
+    return true;
+  }
+  return localAddressSet.has(normalizedHost);
 }
 
 function getResolvedLocalAddresses() {
   const addresses = new Set(localNodeAddresses);
+  if (localNodeIpOverride) {
+    addresses.add(localNodeIpOverride);
+  }
   for (const alias of localNodeAliases) {
     addresses.add(alias);
   }
   return Array.from(addresses).sort();
+}
+
+function shouldUseAliasAddress(host: string) {
+  if (localNodeIpOverride) {
+    return host === localNodeIpOverride;
+  }
+  if (localAddressSet.has(host)) {
+    return true;
+  }
+  return !isLikelyVirtualOrBridgeAddress(host);
 }
 
 function markPeerAsLocalAlias(host: string, port: number) {
@@ -192,7 +234,7 @@ function markPeerAsLocalAlias(host: string, port: number) {
   if (!normalizedHost) {
     return;
   }
-  if (port === wsPort) {
+  if (port === wsPort && shouldUseAliasAddress(normalizedHost)) {
     localNodeAliases.add(normalizedHost);
   }
   const peerKey = `${normalizedHost}:${port}`;
@@ -432,7 +474,7 @@ function buildClusterState(): ClusterStateMessage {
     totalMessages,
     lastClipboardTimestamp: latestMessage?.timestamp ?? null,
     localNode: {
-      displayAddress: pickLocalAddress(preferredAddresses),
+      displayAddress: pickLocalAddress(preferredAddresses, localNodeIpOverride),
       addresses,
       wsPort,
       online: true
