@@ -39,7 +39,7 @@ docker compose logs -f
 - `CLUSTER_STATE_INTERVAL_MS=1500` client/health UI refresh interval.
 - `WS_PUBLIC_PATH=/ws` for reverse-proxy websocket path on same HTTPS domain.
 - `WS_PUBLIC_URL=wss://quickrelay.example.com/ws` optional explicit websocket URL override.
-- `ACCESS_PIN=your-secret` optional websocket passphrase. Clients enter it in the app dialog and receive a short-lived signed access token (PIN itself is not stored).
+- `ACCESS_PIN=your-secret` optional websocket passphrase. Clients must unlock once per browser tab/session; closing the tab requires PIN entry again.
 - Direct IP access is still supported: `http://<server-ip>:3000` will automatically use `ws://<server-ip>:3001`.
 
 ## Reverse Proxy (Nginx Proxy Manager)

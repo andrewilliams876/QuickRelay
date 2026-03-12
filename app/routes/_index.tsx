@@ -350,7 +350,6 @@ export default function Index() {
   const [accessPinInput, setAccessPinInput] = useState("");
   const [authGateLocked, setAuthGateLocked] = useState(authRequired);
   const [showAccessPin, setShowAccessPin] = useState(false);
-  const [showPinDialog, setShowPinDialog] = useState(false);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
 
@@ -365,6 +364,7 @@ export default function Index() {
   const accessTokenRef = useRef("");
   const lastUserEditAtRef = useRef(0);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
+  const manualLockRef = useRef(false);
 
   const wsUrl = useMemo(() => {
     const effectiveAccessToken = authRequired ? accessToken : "";
@@ -416,16 +416,27 @@ export default function Index() {
 
 
   const persistAccessToken = useCallback(
-    (token: string) => {
-      const cleaned = token.trim();
-      accessTokenRef.current = cleaned;
-      setAccessToken(cleaned);
-      setAuthGateLocked(authRequired && !cleaned);
+    (token: string, pinValue?: string) => {
+      const cleanedToken = token.trim();
+      const cleanedPin = pinValue?.trim() ?? "";
+
+      accessTokenRef.current = cleanedToken;
+      setAccessToken(cleanedToken);
+      setAuthGateLocked(authRequired && !cleanedToken);
 
       if (typeof window !== "undefined") {
-        if (cleaned) {
-          window.localStorage.setItem("quickRelayAccessToken", cleaned);
+        if (cleanedToken) {
+          window.sessionStorage.setItem("quickRelayAccessToken", cleanedToken);
+          if (pinValue !== undefined) {
+            if (cleanedPin) {
+              window.sessionStorage.setItem("quickRelayAccessPin", cleanedPin);
+            } else {
+              window.sessionStorage.removeItem("quickRelayAccessPin");
+            }
+          }
         } else {
+          window.sessionStorage.removeItem("quickRelayAccessToken");
+          window.sessionStorage.removeItem("quickRelayAccessPin");
           window.localStorage.removeItem("quickRelayAccessToken");
         }
       }
@@ -437,7 +448,7 @@ export default function Index() {
     async (pinCandidate: string) => {
       if (!authRequired) {
         setAuthError("");
-        persistAccessToken("");
+        persistAccessToken("", "");
         return true;
       }
 
@@ -445,7 +456,6 @@ export default function Index() {
       if (!cleanedPin) {
         setAuthError("Enter ACCESS_PIN to continue.");
         setAuthGateLocked(true);
-        setShowPinDialog(true);
         setStatusText("ACCESS_PIN required before this client can join sync.");
         return false;
       }
@@ -456,17 +466,16 @@ export default function Index() {
 
       try {
         const issued = await requestAccessTokenFromPin(cleanedPin);
-        persistAccessToken(issued.token);
+        persistAccessToken(issued.token, cleanedPin);
+        setAccessPinInput(cleanedPin);
         setAuthGateLocked(false);
-        setShowPinDialog(false);
         setStatusText("Access PIN accepted. Connecting to QuickRelay...");
         return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Invalid access PIN.";
         if (!previousToken) {
-          persistAccessToken("");
+          persistAccessToken("", "");
           setAuthGateLocked(true);
-          setShowPinDialog(true);
         } else {
           setAuthGateLocked(false);
         }
@@ -510,18 +519,29 @@ export default function Index() {
       setDeviceIp(storedIp);
     }
 
-    const storedAccessToken = window.localStorage.getItem("quickRelayAccessToken") ?? "";
+    const storedAccessToken = window.sessionStorage.getItem("quickRelayAccessToken") ?? "";
+    const storedAccessPin = window.sessionStorage.getItem("quickRelayAccessPin") ?? "";
     const resolvedAccessToken = authRequired ? storedAccessToken.trim() : "";
+    const resolvedAccessPin = authRequired ? storedAccessPin.trim() : "";
+
     accessTokenRef.current = resolvedAccessToken;
     setAccessToken(resolvedAccessToken);
+    setAccessPinInput(resolvedAccessPin);
 
     const requiresPin = authRequired && !resolvedAccessToken;
     setAuthGateLocked(requiresPin);
-    setShowPinDialog(requiresPin);
+    if (requiresPin) {
+      setStatusText("Session locked. Enter ACCESS_PIN to continue.");
+    }
 
     if (!authRequired) {
+      window.sessionStorage.removeItem("quickRelayAccessToken");
+      window.sessionStorage.removeItem("quickRelayAccessPin");
       window.localStorage.removeItem("quickRelayAccessToken");
+      setAccessPinInput("");
     }
+
+    window.localStorage.removeItem("quickRelayAccessToken");
 
     void detectDeviceIp().then((ip) => {
       if (!ip) {
@@ -547,11 +567,10 @@ export default function Index() {
     }
 
     setShowAccessPin(false);
-    setShowPinDialog(false);
     setAuthError("");
     setIsAuthSubmitting(false);
     setAccessPinInput("");
-    persistAccessToken("");
+    persistAccessToken("", "");
   }, [authRequired, persistAccessToken]);
 
   const refreshPermissionState = useCallback(async () => {
@@ -744,6 +763,14 @@ export default function Index() {
         if (isCancelled) {
           return;
         }
+
+        if (manualLockRef.current) {
+          manualLockRef.current = false;
+          setIsConnected(false);
+          setStatusText("Session locked. Enter ACCESS_PIN to continue.");
+          return;
+        }
+
         setIsConnected(false);
         setStatusText(authRequired ? "Disconnected. Reconnecting (check ACCESS_PIN if this persists)..." : "Disconnected. Reconnecting...");
         setAuthGateLocked(authRequired && !accessTokenRef.current.trim());
@@ -760,7 +787,6 @@ export default function Index() {
     if (authRequired && !accessTokenRef.current.trim()) {
       setIsConnected(false);
       setAuthGateLocked(true);
-      setShowPinDialog(true);
       setStatusText("ACCESS_PIN required before this client can join sync.");
       return;
     }
@@ -844,17 +870,16 @@ export default function Index() {
       return;
     }
 
-    if (authRequired && cleanedPinInput) {
+    if (authRequired && cleanedPinInput && (authGateLocked || !accessTokenRef.current.trim())) {
       const authenticated = await exchangeAccessPinForToken(cleanedPinInput);
       if (!authenticated) {
         return;
       }
-      setAccessPinInput("");
+
     }
 
     if (authRequired && !accessTokenRef.current.trim()) {
       setAuthGateLocked(true);
-      setShowPinDialog(true);
       setStatusText("ACCESS_PIN required before this client can join sync.");
       return;
     }
@@ -871,6 +896,7 @@ export default function Index() {
     setStatusText(authRequired ? "Client identity and auth token updated." : "Client identity updated.");
   }, [
     accessPinInput,
+    authGateLocked,
     authRequired,
     clientName,
     deviceIp,
@@ -879,24 +905,39 @@ export default function Index() {
   ]);
 
   const handlePinDialogSubmit = useCallback(async () => {
-    const authenticated = await exchangeAccessPinForToken(accessPinInput);
-    if (authenticated) {
-      setAccessPinInput("");
-    }
+    await exchangeAccessPinForToken(accessPinInput);
   }, [accessPinInput, exchangeAccessPinForToken]);
+
+  const handleLockSession = useCallback(() => {
+    setAuthError("");
+    setIsAuthSubmitting(false);
+    setShowAccessPin(false);
+    setAccessPinInput("");
+    persistAccessToken("", "");
+    setAuthGateLocked(true);
+    setStatusText("Session locked. Enter ACCESS_PIN to continue.");
+
+    manualLockRef.current = true;
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
+      wsRef.current.close();
+    }
+    wsRef.current = null;
+    setIsConnected(false);
+  }, [persistAccessToken]);
 
   const permissionBadgeVariant =
     permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
   const connectionBadgeVariant = isConnected ? "success" : "warning";
   const accessBadgeVariant = !authRequired ? "outline" : authGateLocked ? "warning" : "success";
   const connectedClientCount = connectedClients.length;
+  const isAuthLocked = authRequired && authGateLocked;
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
       <div className="pointer-events-none absolute -top-32 right-0 h-96 w-96 rounded-full bg-primary/15 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-24 left-4 h-80 w-80 rounded-full bg-accent/35 blur-3xl" />
 
-      {authRequired && showPinDialog ? (
+      {isAuthLocked ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
             <h2 className="text-2xl font-semibold text-card-foreground">Enter Access PIN</h2>
@@ -946,16 +987,6 @@ export default function Index() {
               </label>
               {authError ? <p className="text-xs text-warning">{authError}</p> : null}
               <div className="flex justify-end gap-2 pt-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setShowPinDialog(false);
-                    setAuthError("");
-                  }}
-                >
-                  Cancel
-                </Button>
                 <Button type="submit" disabled={isAuthSubmitting}>
                   {isAuthSubmitting ? "Checking..." : "Continue"}
                 </Button>
@@ -965,7 +996,7 @@ export default function Index() {
         </div>
       ) : null}
 
-      <section className="mx-auto grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <section className={`mx-auto grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px] ${isAuthLocked ? "pointer-events-none select-none opacity-60" : ""}`}>
         <Card>
           <CardHeader>
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -984,14 +1015,14 @@ export default function Index() {
               <Badge variant={accessBadgeVariant}>
                 {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
               </Badge>
-              {authRequired ? (
+              {authRequired && !isAuthLocked ? (
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-7 px-2 text-[11px]"
-                  onClick={() => setShowPinDialog(true)}
+                  onClick={handleLockSession}
                 >
-                  Enter PIN
+                  Lock
                 </Button>
               ) : null}
             </div>
@@ -1050,8 +1081,8 @@ export default function Index() {
                     value={authRequired ? accessPinInput : ""}
                     disabled={!authRequired}
                     onChange={(event) => setAccessPinInput(event.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 text-sm text-foreground disabled:cursor-not-allowed disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-70"
-                    placeholder={authRequired ? "Enter ACCESS_PIN to refresh token" : "Disabled (ACCESS_PIN not set)"}
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 text-sm text-foreground placeholder:text-xs disabled:cursor-not-allowed disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-70"
+                    placeholder={authRequired ? "ACCESS_PIN (session)" : "Disabled (ACCESS_PIN not set)"}
                   />
                   <button
                     type="button"
