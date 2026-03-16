@@ -58,6 +58,7 @@ type ClusterStateMessage = {
 };
 
 type PermissionLevel = "checking" | "granted" | "limited" | "blocked";
+type ThemeMode = "light" | "dark";
 type WsInboundMessage = ClipboardUpdateMessage | ClusterStateMessage;
 
 type AccessTokenApiResponse = {
@@ -329,9 +330,25 @@ function selectBestIp(ips: string[]) {
   return sorted[0] ?? null;
 }
 
+function getSystemThemeMode(): ThemeMode {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "light";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function getInitialThemeMode(): ThemeMode {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  const storedTheme = window.localStorage.getItem("quickRelayThemeMode");
+  return storedTheme === "dark" || storedTheme === "light" ? storedTheme : getSystemThemeMode();
+}
+
 export default function Index() {
   const { wsPort, wsPublicPath, wsPublicUrl, authRequired } = useLoaderData<typeof loader>();
 
+  const [themeMode, setThemeMode] = useState<ThemeMode>("light");
   const [clipboardText, setClipboardText] = useState("");
   const [statusText, setStatusText] = useState("Connecting to LAN sync server...");
   const [isConnected, setIsConnected] = useState(false);
@@ -931,21 +948,75 @@ export default function Index() {
   const accessBadgeVariant = !authRequired ? "outline" : authGateLocked ? "warning" : "success";
   const connectedClientCount = connectedClients.length;
   const isAuthLocked = authRequired && authGateLocked;
+  const pageReady = !isAuthLocked;
+  const displayStatus = sanitizeWsUrlForDisplay(activeWsUrl || wsUrl || `ws://<host>:${wsPort}`);
+  const surfaceInputClassName =
+    "h-12 rounded-2xl border border-border/70 bg-background/80 px-4 text-sm text-foreground shadow-sm transition placeholder:text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground/80 disabled:opacity-100";
+
+  useEffect(() => {
+    const initialTheme = getInitialThemeMode();
+    setThemeMode(initialTheme);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    document.documentElement.classList.toggle("dark", themeMode === "dark");
+    document.documentElement.style.colorScheme = themeMode;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("quickRelayThemeMode", themeMode);
+    }
+  }, [themeMode]);
+
+  const toggleThemeMode = useCallback(() => {
+    setThemeMode((value) => (value === "dark" ? "light" : "dark"));
+  }, []);
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-8 sm:px-8">
-      <div className="pointer-events-none absolute -top-32 right-0 h-96 w-96 rounded-full bg-primary/15 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 left-4 h-80 w-80 rounded-full bg-accent/35 blur-3xl" />
+    <main className="relative min-h-screen overflow-hidden px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-primary/10 via-transparent to-transparent" />
+      <div className="pointer-events-none absolute -top-24 left-[-8rem] h-72 w-72 rounded-full bg-sky-400/20 blur-3xl dark:bg-sky-500/20" />
+      <div className="pointer-events-none absolute right-[-6rem] top-24 h-80 w-80 rounded-full bg-teal-300/20 blur-3xl dark:bg-cyan-400/15" />
+      <div className="pointer-events-none absolute bottom-[-8rem] left-1/3 h-80 w-80 rounded-full bg-amber-200/30 blur-3xl dark:bg-indigo-500/15" />
 
       {isAuthLocked ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl">
-            <h2 className="text-2xl font-semibold text-card-foreground">Enter Access PIN</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
+          <div className="w-full max-w-md rounded-[32px] border border-border/70 bg-card/95 p-6 shadow-[0_28px_70px_rgba(15,23,42,0.25)] sm:p-7">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <rect x="5" y="11" width="14" height="9" rx="2" />
+                    <path d="M8 11V8a4 4 0 118 0v3" />
+                  </svg>
+                </div>
+                <h2 className="mt-4 text-2xl font-semibold tracking-tight text-card-foreground">Unlock QuickRelay</h2>
+              </div>
+              <Button type="button" variant="outline" size="sm" className="px-3" onClick={toggleThemeMode}>
+                {themeMode === "dark" ? (
+                  <span className="inline-flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2.2M19.8 12H22M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" />
+                    </svg>
+                    Light
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" />
+                    </svg>
+                    Dark
+                  </span>
+                )}
+              </Button>
+            </div>
+            <p className="text-sm leading-6 text-muted-foreground">
               This server requires an ACCESS_PIN before this client can join realtime sync.
             </p>
             <form
-              className="mt-5 space-y-4"
+              className="mt-6 space-y-4"
               onSubmit={(event) => {
                 event.preventDefault();
                 void handlePinDialogSubmit();
@@ -960,14 +1031,14 @@ export default function Index() {
                     value={accessPinInput}
                     onChange={(event) => setAccessPinInput(event.target.value)}
                     autoFocus
-                    className="h-10 w-full rounded-md border border-input bg-background px-3 pr-10 text-sm text-foreground"
+                    className={`${surfaceInputClassName} w-full pr-11`}
                     placeholder="Enter ACCESS_PIN"
                   />
                   <button
                     type="button"
                     aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
                     onClick={() => setShowAccessPin((value) => !value)}
-                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition hover:text-foreground"
+                    className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground"
                   >
                     {showAccessPin ? (
                       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -987,7 +1058,7 @@ export default function Index() {
               </label>
               {authError ? <p className="text-xs text-warning">{authError}</p> : null}
               <div className="flex justify-end gap-2 pt-1">
-                <Button type="submit" disabled={isAuthSubmitting}>
+                <Button type="submit" className="min-w-[132px]" disabled={isAuthSubmitting}>
                   {isAuthSubmitting ? "Checking..." : "Continue"}
                 </Button>
               </div>
@@ -996,83 +1067,171 @@ export default function Index() {
         </div>
       ) : null}
 
-      <section className={`mx-auto grid w-full max-w-5xl gap-6 lg:grid-cols-[minmax(0,1fr)_320px] ${isAuthLocked ? "pointer-events-none select-none opacity-60" : ""}`}>
-        <Card>
-          <CardHeader>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Badge variant={connectionBadgeVariant}>
-                {isConnected ? "Realtime Connected" : "Server Offline"}
-              </Badge>
-              <Badge variant={permissionBadgeVariant}>
-                {permissionLevel === "granted"
-                  ? "Clipboard Access Ready"
-                  : permissionLevel === "checking"
-                    ? "Checking Permissions"
-                    : permissionLevel === "limited"
-                      ? "Permission Prompt Needed"
-                      : "Clipboard Access Blocked"}
-              </Badge>
-              <Badge variant={accessBadgeVariant}>
-                {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
-              </Badge>
+      <section
+        className={`mx-auto flex w-full max-w-6xl flex-col gap-6 ${!pageReady ? "pointer-events-none select-none opacity-60" : ""}`}
+      >
+        <div className="flex flex-col gap-4 rounded-[32px] border border-border/60 bg-card/75 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-3">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
+                  <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M7 7h6a4 4 0 014 4v6" />
+                    <path d="M17 17h-6a4 4 0 01-4-4V7" />
+                    <path d="M8 16L16 8" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/80">Realtime clipboard relay</p>
+                  <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">QuickRelay</h1>
+                </div>
+              </div>
+              <p className="max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
+                Copy text on one machine and it syncs across connected clients in realtime with a cleaner, faster LAN clipboard workflow.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+              <Button type="button" variant="outline" className="min-w-[124px]" onClick={toggleThemeMode}>
+                {themeMode === "dark" ? (
+                  <span className="inline-flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2.2M19.8 12H22M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" />
+                    </svg>
+                    Light mode
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" />
+                    </svg>
+                    Dark mode
+                  </span>
+                )}
+              </Button>
               {authRequired && !isAuthLocked ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={handleLockSession}
-                >
-                  Lock
+                <Button type="button" variant="secondary" className="min-w-[116px]" onClick={handleLockSession}>
+                  <span className="inline-flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <rect x="5" y="11" width="14" height="9" rx="2" />
+                      <path d="M8 11V8a4 4 0 118 0v3" />
+                    </svg>
+                    Lock session
+                  </span>
                 </Button>
               ) : null}
             </div>
-            <CardTitle>QuickRelay</CardTitle>
-            <CardDescription>
-              Copy text on one machine, it syncs over websocket, and applies on connected clients.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="block text-sm font-medium text-foreground/90" htmlFor="clipboard-mirror">
-              Clipboard Mirror
-            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={connectionBadgeVariant}>{isConnected ? "Realtime Connected" : "Server Offline"}</Badge>
+            <Badge variant={permissionBadgeVariant}>
+              {permissionLevel === "granted"
+                ? "Clipboard Access Ready"
+                : permissionLevel === "checking"
+                  ? "Checking Permissions"
+                  : permissionLevel === "limited"
+                    ? "Permission Prompt Needed"
+                    : "Clipboard Access Blocked"}
+            </Badge>
+            <Badge variant={accessBadgeVariant}>
+              {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_360px]">
+          <Card className="overflow-hidden">
+            <CardHeader className="gap-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <CardTitle>Clipboard Mirror</CardTitle>
+                  <CardDescription>
+                    Live text surface for shared clipboard updates across every connected device.
+                  </CardDescription>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-right shadow-sm">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Live route</p>
+                  <p className="mt-1 max-w-[220px] truncate font-mono text-xs text-foreground sm:max-w-[280px]">{displayStatus}</p>
+                </div>
+              </div>
+            </CardHeader>
+          <CardContent className="space-y-5">
             <Textarea
               id="clipboard-mirror"
               value={clipboardText}
               placeholder="Clipboard text appears here and syncs to all connected devices."
               onChange={(event) => void handleManualShare(event.target.value)}
-              className="font-mono text-xs"
+              className="min-h-[240px] font-mono text-sm leading-7 sm:min-h-[280px]"
             />
-            <div className="rounded-lg border border-border/70 bg-background/70 p-3 font-mono text-xs text-muted-foreground">
-              <div>Status: {statusText}</div>
-              <div className="mt-1">WebSocket: {sanitizeWsUrlForDisplay(activeWsUrl || wsUrl || `ws://<host>:${wsPort}`)}</div>
-              <div className="mt-1">
-                Server IP: {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
+
+            <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Connection details</p>
+                  <p className="text-xs text-muted-foreground">Current client, route, and server metadata.</p>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-full bg-muted/70 px-3 py-1.5 text-xs text-muted-foreground">
+                  <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-success" : "bg-warning"}`} />
+                  {isConnected ? "Online" : "Retrying"}
+                </div>
               </div>
-              <div className="mt-1">This device IP: {deviceIp || "unavailable"}</div>
-              <div className="mt-1">Client name: {clientName || "initializing..."}</div>
-              <div className="mt-1">Cluster server id: {clusterServerId ?? "initializing..."}</div>
-              <div className="mt-1">Local client id: {clientId || "initializing..."}</div>
+              <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Status</p>
+                  <p className="mt-2 font-mono text-foreground">{statusText}</p>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Server IP</p>
+                  <p className="mt-2 font-mono text-foreground">
+                    {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">This device IP</p>
+                  <p className="mt-2 font-mono text-foreground">{deviceIp || "unavailable"}</p>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Client name</p>
+                  <p className="mt-2 font-mono text-foreground">{clientName || "initializing..."}</p>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Cluster server id</p>
+                  <p className="mt-2 break-all font-mono text-foreground">{clusterServerId ?? "initializing..."}</p>
+                </div>
+                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Local client id</p>
+                  <p className="mt-2 break-all font-mono text-foreground">{clientId || "initializing..."}</p>
+                </div>
+              </div>
             </div>
-            <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+
+            <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-foreground">Client identity</p>
+                <p className="text-xs text-muted-foreground">Label this device and manage the optional access PIN for this session.</p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
                 Client label
                 <input
                   value={clientName}
                   onChange={(event) => setClientName(event.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                  className={surfaceInputClassName}
                   placeholder="Set a client name"
                 />
               </label>
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
                 Device IP (optional)
                 <input
                   value={deviceIp}
                   onChange={(event) => setDeviceIp(event.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                  className={surfaceInputClassName}
                   placeholder="e.g. 10.50.100.13"
                 />
               </label>
-              <label className="flex flex-col gap-1 text-xs text-muted-foreground sm:col-span-2 lg:col-span-1">
+                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground md:col-span-2">
                 Access PIN (optional)
                 <div className="relative">
                   <input
@@ -1081,15 +1240,15 @@ export default function Index() {
                     value={authRequired ? accessPinInput : ""}
                     disabled={!authRequired}
                     onChange={(event) => setAccessPinInput(event.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 pr-10 text-sm text-foreground placeholder:text-xs disabled:cursor-not-allowed disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-70"
-                    placeholder={authRequired ? "ACCESS_PIN (session)" : "Disabled (ACCESS_PIN not set)"}
+                    className={`${surfaceInputClassName} w-full pr-11`}
+                    placeholder={authRequired ? "Stored for this browser session" : "Disabled until ACCESS_PIN is enabled"}
                   />
                   <button
                     type="button"
                     aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
                     disabled={!authRequired}
                     onClick={() => setShowAccessPin((value) => !value)}
-                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                    className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {showAccessPin ? (
                       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -1107,82 +1266,102 @@ export default function Index() {
                   </button>
                 </div>
               </label>
-              <div className="sm:col-span-2 lg:col-span-1">
-                <Button className="w-full lg:w-auto" size="sm" disabled={isAuthSubmitting} onClick={() => void handleSaveClientName()}>
+              </div>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-xs text-muted-foreground">
+                  Changes here update how this client appears across the QuickRelay server.
+                </p>
+                <Button className="w-full sm:w-auto" disabled={isAuthSubmitting} onClick={() => void handleSaveClientName()}>
                   Save Client Identity
                 </Button>
               </div>
             </div>
           </CardContent>
-          <CardFooter className="flex flex-wrap gap-3">
-            <Button onClick={() => void handleEnableClipboard()} variant="secondary">
+          <CardFooter className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <Button onClick={() => void handleEnableClipboard()} variant="secondary" className="w-full sm:w-auto">
               Enable Clipboard Access
             </Button>
-            <Button onClick={() => void pollLocalClipboard()} variant="outline">
+            <Button onClick={() => void pollLocalClipboard()} variant="outline" className="w-full sm:w-auto">
               Force Read Clipboard
             </Button>
           </CardFooter>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl">Session Stats</CardTitle>
-            <CardDescription>Live health for this server and connected clients.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Local messages sent</span>
-              <span className="font-mono text-foreground">{localMessagesSent}</span>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Cluster messages seen</span>
-              <span className="font-mono text-foreground">{clusterMessagesSeen}</span>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Clients on this server</span>
-              <span className="font-mono text-foreground">{clusterConnectedClients}</span>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Clients connected</span>
-              <span className="font-mono text-foreground">
-                {connectedClientCount}
-              </span>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Last remote update</span>
-              <span className="font-mono text-foreground">{lastRemoteUpdate ?? "None yet"}</span>
-            </div>
-            <Separator />
-            <div className="space-y-2">
-              <p className="text-muted-foreground">Connected clients</p>
-              {connectedClients.length === 0 ? (
-                <p className="text-xs text-foreground/90">No connected clients yet.</p>
-              ) : (
-                <ul className="space-y-1">
-                  {connectedClients.map((entry) => (
-                    <li
-                      key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`}
-                      className="flex items-center justify-between text-xs"
-                    >
-                      <span className="inline-flex items-center gap-2 font-mono">
-                        <span className="inline-block h-2 w-2 rounded-full bg-success" />
-                        {entry.clientName}
-                      </span>
-                      <span className="text-success">
-                        {entry.ip}
-                        {entry.clientId === clientId ? " (you)" : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+          <Card className="xl:sticky xl:top-8 xl:self-start">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-2xl">Session Stats</CardTitle>
+                  <CardDescription>Live health for this server and connected clients.</CardDescription>
+                </div>
+                <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M4 19V9" />
+                    <path d="M10 19V5" />
+                    <path d="M16 19v-7" />
+                    <path d="M22 19V3" />
+                  </svg>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Local messages sent</p>
+                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{localMessagesSent}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Cluster messages seen</p>
+                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterMessagesSeen}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients on this server</p>
+                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterConnectedClients}</p>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients connected</p>
+                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{connectedClientCount}</p>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last remote update</p>
+                <p className="mt-3 font-mono text-base font-semibold text-foreground">{lastRemoteUpdate ?? "None yet"}</p>
+              </div>
+              <Separator />
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-foreground">Connected clients</p>
+                {connectedClients.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">
+                    No connected clients yet.
+                  </div>
+                ) : (
+                  <ul className="space-y-3">
+                    {connectedClients.map((entry) => (
+                      <li
+                        key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"
+                      >
+                        <span className="min-w-0">
+                          <span className="inline-flex items-center gap-2 font-mono text-sm text-foreground">
+                            <span className="inline-block h-2.5 w-2.5 rounded-full bg-success shadow-[0_0_0_4px_rgba(14,165,233,0.1)]" />
+                            <span className="truncate">{entry.clientName}</span>
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {entry.clientId === clientId ? "This browser session" : "Connected device"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-right text-xs font-medium text-success">
+                          {entry.ip}
+                          {entry.clientId === clientId ? " (you)" : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </section>
     </main>
   );

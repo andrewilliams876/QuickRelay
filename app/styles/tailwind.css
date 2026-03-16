@@ -4,34 +4,84 @@
 
 @layer base {
   :root {
-    --background: 42 62% 97%;
-    --foreground: 186 55% 11%;
+    color-scheme: light;
+    --background: 210 33% 98%;
+    --foreground: 220 27% 16%;
     --card: 0 0% 100%;
-    --card-foreground: 186 55% 11%;
-    --primary: 186 74% 30%;
-    --primary-foreground: 42 62% 98%;
-    --muted: 185 22% 90%;
-    --muted-foreground: 186 20% 34%;
-    --accent: 25 90% 85%;
-    --accent-foreground: 22 58% 22%;
-    --border: 188 28% 75%;
-    --input: 188 26% 77%;
-    --ring: 186 74% 30%;
-    --success: 149 56% 32%;
-    --warning: 21 86% 44%;
-    --radius: 0.9rem;
+    --card-foreground: 220 27% 16%;
+    --primary: 213 89% 48%;
+    --primary-foreground: 210 40% 98%;
+    --muted: 210 30% 94%;
+    --muted-foreground: 217 18% 43%;
+    --accent: 190 78% 92%;
+    --accent-foreground: 198 72% 25%;
+    --border: 214 28% 85%;
+    --input: 214 30% 78%;
+    --ring: 213 89% 48%;
+    --success: 156 72% 32%;
+    --warning: 23 90% 52%;
+    --radius: 1.35rem;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 223 32% 10%;
+    --foreground: 210 20% 94%;
+    --card: 222 28% 14%;
+    --card-foreground: 210 20% 94%;
+    --primary: 199 95% 66%;
+    --primary-foreground: 223 42% 10%;
+    --muted: 222 21% 20%;
+    --muted-foreground: 216 14% 73%;
+    --accent: 262 38% 22%;
+    --accent-foreground: 210 30% 94%;
+    --border: 219 20% 28%;
+    --input: 219 19% 33%;
+    --ring: 199 95% 66%;
+    --success: 156 65% 54%;
+    --warning: 29 92% 61%;
   }
 
   * {
     @apply border-border;
   }
 
+  html {
+    min-height: 100%;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(circle at 20% 20%, hsl(186 72% 70% / 0.28), transparent 35%),
-      radial-gradient(circle at 80% 0%, hsl(28 100% 85% / 0.42), transparent 40%),
-      linear-gradient(135deg, hsl(40 70% 98%), hsl(173 42% 95%));
+      radial-gradient(circle at 12% 18%, hsl(196 100% 78% / 0.24), transparent 30%),
+      radial-gradient(circle at 84% 10%, hsl(217 100% 78% / 0.18), transparent 34%),
+      linear-gradient(160deg, hsl(212 60% 99%), hsl(200 41% 96%));
     min-height: 100vh;
+    transition:
+      background-color 180ms ease,
+      color 180ms ease,
+      background-image 180ms ease;
+  }
+
+  .dark body {
+    background-image:
+      radial-gradient(circle at 14% 18%, hsl(194 90% 58% / 0.18), transparent 26%),
+      radial-gradient(circle at 84% 8%, hsl(264 80% 60% / 0.16), transparent 30%),
+      linear-gradient(165deg, hsl(224 35% 12%), hsl(219 28% 10%));
+  }
+
+  input,
+  textarea,
+  button {
+    transition:
+      background-color 180ms ease,
+      color 180ms ease,
+      border-color 180ms ease,
+      box-shadow 180ms ease,
+      transform 180ms ease;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.22);
   }
 }
