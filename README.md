@@ -4,7 +4,7 @@ QuickRelay is a simple LAN clipboard tool.
 
 Open it on two or more devices, paste text into one, and it shows up on the others instantly. No accounts, no cloud, just real-time sync on your local network.
 
----
+--
 
 ## How it works
 
@@ -18,7 +18,7 @@ Example:
 
 http://<SERVER_LAN_IP>:3000
 
----
+--
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Then open:
 
 http://<your-server-ip>:3000
 
----
+--
 
 ## Features
 
@@ -42,7 +42,7 @@ http://<your-server-ip>:3000
 - Works over LAN IP or behind a reverse proxy  
 - Docker-ready deployment  
 
----
+--
 
 ## Architecture
 
@@ -54,14 +54,14 @@ QuickRelay is designed to run as a single server.
 
 This keeps setup simple and avoids sync conflicts.
 
----
+--
 
 ## Ports
 
 - `3000/tcp` — Web UI  
 - `3001/tcp` — WebSocket sync  
 
----
+--
 
 ## Configuration
 
@@ -73,7 +73,7 @@ This keeps setup simple and avoids sync conflicts.
 - `WS_HOST=0.0.0.0`  
   Allows the WebSocket server to accept connections from outside the container  
 
----
+--
 
 ### Networking
 
@@ -86,14 +86,14 @@ This keeps setup simple and avoids sync conflicts.
 - `LOCAL_NODE_IP=192.168.x.x`  
   Forces which IP is shown as the server identity  
 
----
+--
 
 ### Access control
 
 - `ACCESS_PIN=`  
   Optional shared passphrase required before clients can connect  
 
----
+--
 
 ### Behaviour
 
@@ -103,7 +103,7 @@ This keeps setup simple and avoids sync conflicts.
 - `CLUSTER_STATE_INTERVAL_MS=1500`  
   UI refresh interval for session/client state  
 
----
+--
 
 ## Reverse Proxy (Nginx Proxy Manager)
 
@@ -128,7 +128,7 @@ WS_PUBLIC_URL=
 ACCESS_PIN=your-secret
 ```
 
----
+--
 
 ## Notes
 
@@ -138,7 +138,7 @@ ACCESS_PIN=your-secret
 - If Docker networking shows the wrong IP, you can override it in the UI  
 - WebSocket auth uses short-lived tokens — use HTTPS/WSS to protect them  
 
----
+--
 
 ## Summary
 
