@@ -6,10 +6,10 @@ import stylesheet from "./styles/tailwind.css";
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "LAN Clipboard" },
+    { title: "QuickRelay" },
     {
       name: "description",
-      content: "Realtime LAN clipboard sync with Remix and websocket transport."
+      content: "Realtime LAN clipboard sync with QuickRelay over websocket transport."
     }
   ];
 };
@@ -45,3 +45,4 @@ export function Layout({ children }: { children: ReactNode }) {
     </html>
   );
 }
+

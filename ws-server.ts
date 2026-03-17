@@ -4,6 +4,8 @@ import os from "node:os";
 
 import { WebSocket, WebSocketServer } from "ws";
 
+import { issueWsAccessToken, verifyWsAccessToken } from "./app/lib/access-token.server";
+
 type ClipboardUpdateMessage = {
   type: "clipboard_update";
   text: string;
@@ -105,6 +107,8 @@ const peerReconnectMs = Number(process.env.PEER_RECONNECT_MS ?? 3000);
 const seenMessageTtlMs = Number(process.env.SEEN_MESSAGE_TTL_MS ?? 120000);
 const clusterStateIntervalMs = Number(process.env.CLUSTER_STATE_INTERVAL_MS ?? 1500);
 const serverId = process.env.SERVER_ID ?? makeId();
+const accessPin = (process.env.ACCESS_PIN ?? "").trim();
+const authRequired = accessPin.length > 0;
 const localNodeIpOverride = normalizeAddress((process.env.LOCAL_NODE_IP ?? "").trim()) || null;
 const localNodeAddresses = getLocalNodeAddresses(localNodeIpOverride);
 const localAddressSet = new Set(localNodeAddresses);
@@ -152,7 +156,17 @@ let discoveryTimer: NodeJS.Timeout | null = null;
 let cleanupTimer: NodeJS.Timeout | null = null;
 let clusterStateTimer: NodeJS.Timeout | null = null;
 
-const wsServer = new WebSocketServer({ host: wsHost, port: wsPort });
+const wsServer = new WebSocketServer({
+  host: wsHost,
+  port: wsPort,
+  verifyClient: (info, done) => {
+    if (isAuthorizedWsRequest(info.req)) {
+      done(true);
+      return;
+    }
+    done(false, 401, "Unauthorized");
+  }
+});
 
 function makeId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -221,6 +235,20 @@ function getRemoteIp(request: IncomingMessage) {
     }
   }
   return normalizeAddress(request.socket.remoteAddress ?? "unknown");
+}
+function isAuthorizedWsRequest(request: IncomingMessage) {
+  if (!authRequired) {
+    return true;
+  }
+
+  const hostHeader = request.headers.host ?? `localhost:${wsPort}`;
+  try {
+    const url = new URL(request.url ?? "/", `http://${hostHeader}`);
+    const token = (url.searchParams.get("token") ?? "").trim();
+    return token.length > 0 && verifyWsAccessToken(token, accessPin);
+  } catch {
+    return false;
+  }
 }
 
 function isLikelyVirtualOrBridgeAddress(ip: string) {
@@ -781,6 +809,17 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
   });
 }
 
+
+function buildPeerWebSocketUrl(host: string, port: number) {
+  const url = new URL(`ws://${host}:${port}`);
+  if (authRequired) {
+    const peerToken = issueWsAccessToken(accessPin, { audience: "peer" });
+    if (peerToken) {
+      url.searchParams.set("token", peerToken);
+    }
+  }
+  return url.toString();
+}
 function clearReconnectTimer(peerKey: string) {
   const timer = reconnectTimers.get(peerKey);
   if (!timer) {
@@ -827,11 +866,11 @@ function connectToPeer(host: string, port: number, peerKey: string) {
 
   clearReconnectTimer(peerKey);
 
-  const socket = new WebSocket(`ws://${host}:${port}`);
+  const socket = new WebSocket(buildPeerWebSocketUrl(host, port));
   outboundPeers.set(peerKey, socket);
 
   socket.on("open", () => {
-    console.log(`[lan-clipboard] Connected peer ${peerKey}`);
+    console.log(`[quickrelay] Connected peer ${peerKey}`);
     sendJson(socket, { type: "peer_hello", serverId, wsPort } satisfies PeerHelloMessage);
     if (latestMessage) {
       sendJson(socket, latestMessage);
@@ -875,7 +914,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
   });
 
   socket.on("close", () => {
-    console.log(`[lan-clipboard] Peer closed ${peerKey}`);
+    console.log(`[quickrelay] Peer closed ${peerKey}`);
     if (outboundPeers.get(peerKey) === socket) {
       outboundPeers.delete(peerKey);
     }
@@ -884,7 +923,7 @@ function connectToPeer(host: string, port: number, peerKey: string) {
   });
 
   socket.on("error", () => {
-    console.log(`[lan-clipboard] Peer error ${peerKey}`);
+    console.log(`[quickrelay] Peer error ${peerKey}`);
     if (outboundPeers.get(peerKey) === socket) {
       outboundPeers.delete(peerKey);
     }
@@ -909,14 +948,14 @@ function sendDiscoveryHeartbeat() {
 
 function setupDiscovery() {
   if (!discoveryEnabled) {
-    console.log("[lan-clipboard] Discovery disabled.");
+    console.log("[quickrelay] Discovery disabled.");
     return;
   }
 
   discoverySocket = dgram.createSocket("udp4");
 
   discoverySocket.on("error", (error) => {
-    console.error("[lan-clipboard] UDP discovery error:", error);
+    console.error("[quickrelay] UDP discovery error:", error);
   });
 
   discoverySocket.on("message", (raw, remote) => {
@@ -940,7 +979,7 @@ function setupDiscovery() {
     ensurePeerMeta(peerKey, host, parsed.wsPort, { fromDiscovery: true });
     updatePeerMetaFromHello(peerKey, parsed.serverId);
 
-    console.log(`[lan-clipboard] Discovered peer ${parsed.serverId} at ${peerKey}`);
+    console.log(`[quickrelay] Discovered peer ${parsed.serverId} at ${peerKey}`);
     connectToPeer(host, parsed.wsPort, peerKey);
     broadcastClusterState();
   });
@@ -948,7 +987,7 @@ function setupDiscovery() {
   discoverySocket.bind(discoveryPort, "0.0.0.0", () => {
     discoverySocket?.setBroadcast(true);
     console.log(
-      `[lan-clipboard] Discovery enabled on udp://${discoveryBroadcast}:${discoveryPort} (server ${serverId})`
+      `[quickrelay] Discovery enabled on udp://${discoveryBroadcast}:${discoveryPort} (server ${serverId})`
     );
     sendDiscoveryHeartbeat();
     discoveryTimer = setInterval(sendDiscoveryHeartbeat, discoveryIntervalMs);
@@ -958,11 +997,11 @@ function setupDiscovery() {
 wsServer.on("connection", registerInboundSocketHandlers);
 
 wsServer.on("listening", () => {
-  console.log(`[lan-clipboard] WebSocket server listening on ws://${wsHost}:${wsPort} (server ${serverId})`);
+  console.log(`[quickrelay] WebSocket server listening on ws://${wsHost}:${wsPort} (server ${serverId})`);
 });
 
 wsServer.on("error", (error) => {
-  console.error("[lan-clipboard] WebSocket server error:", error);
+  console.error("[quickrelay] WebSocket server error:", error);
 });
 
 for (const seed of peerSeeds) {
@@ -974,7 +1013,7 @@ cleanupTimer = setInterval(cleanupCaches, 30_000);
 clusterStateTimer = setInterval(broadcastClusterState, clusterStateIntervalMs);
 
 const shutdown = () => {
-  console.log("[lan-clipboard] Shutting down...");
+  console.log("[quickrelay] Shutting down...");
 
   if (discoveryTimer) {
     clearInterval(discoveryTimer);
@@ -1012,3 +1051,4 @@ const shutdown = () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
