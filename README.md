@@ -1,24 +1,24 @@
 # QuickRelay
 
-Realtime text clipboard sync across devices on the same LAN.
+QuickRelay is a simple LAN clipboard tool.
 
-## Recommended Architecture
+Open it on two or more devices, paste text into one, and it shows up on the others instantly. No accounts, no cloud, just real-time sync on your local network.
 
-Run a single server instance and access it from any PC or mobile device on the same network.
+---
 
-```text
+## How it works
+
+QuickRelay runs as a single server on your LAN.
+
+- Open the app in your browser on any device
+- All connected clients share the same live text surface
+- Changes sync in real time over WebSockets
+
+Example:
+
 http://<SERVER_LAN_IP>:3000
-```
 
-No peer discovery or cross-server linking is required for this mode.
-
-## Features
-
-- Shared clipboard textbox sync for all connected clients.
-- Per-client identity (`name + IP`) shown in Session Stats.
-- Local client rename support from the UI.
-- Optional ACCESS_PIN gate for LAN clients with an in-app PIN dialog.
-- Dockerized deployment.
+---
 
 ## Quick Start
 
@@ -27,45 +27,126 @@ docker compose up --build -d
 docker compose logs -f
 ```
 
+Then open:
+
+http://<your-server-ip>:3000
+
+---
+
+## Features
+
+- Shared live clipboard textbox across all connected devices  
+- Per-device identity (name + IP)  
+- Client rename support from the UI  
+- Optional `ACCESS_PIN` for gated LAN access  
+- Works over LAN IP or behind a reverse proxy  
+- Docker-ready deployment  
+
+---
+
+## Architecture
+
+QuickRelay is designed to run as a single server.
+
+- No peer discovery required  
+- No multi-node clustering needed  
+- Clients connect directly to the server  
+
+This keeps setup simple and avoids sync conflicts.
+
+---
+
 ## Ports
 
-- `3000/tcp`: Remix UI
-- `3001/tcp`: WebSocket sync
+- `3000/tcp` — Web UI  
+- `3001/tcp` — WebSocket sync  
 
-## Important Environment Flags
+---
 
-- `LOCAL_NODE_IP=10.50.100.13` force which IP is shown as local on that server. Change to your local IP
-- `DISCOVERY_ENABLED=false` keep single-server mode.
-- `CLUSTER_STATE_INTERVAL_MS=1500` client/health UI refresh interval.
-- `WS_PUBLIC_PATH=/ws` for reverse-proxy websocket path on same HTTPS domain.
-- `WS_PUBLIC_URL=wss://quickrelay.example.com/ws` optional explicit websocket URL override.
-- `ACCESS_PIN=your-secret` optional websocket passphrase. Clients must unlock once per browser tab/session; closing the tab requires PIN entry again.
-- Direct IP access is still supported: `http://<server-ip>:3000` will automatically use `ws://<server-ip>:3001`.
+## Configuration
+
+### Core
+
+- `NODE_ENV=production`  
+  Run in production mode for stable deployments  
+
+- `WS_HOST=0.0.0.0`  
+  Allows the WebSocket server to accept connections from outside the container  
+
+---
+
+### Networking
+
+- `WS_PUBLIC_PATH=/ws`  
+  Use when running behind a reverse proxy on the same domain  
+
+- `WS_PUBLIC_URL=`  
+  Optional full override (e.g. `wss://quickrelay.example.com/ws`)  
+
+- `LOCAL_NODE_IP=192.168.x.x`  
+  Forces which IP is shown as the server identity  
+
+---
+
+### Access control
+
+- `ACCESS_PIN=`  
+  Optional shared passphrase required before clients can connect  
+
+---
+
+### Behaviour
+
+- `DISCOVERY_ENABLED=false`  
+  Recommended for single-server setups  
+
+- `CLUSTER_STATE_INTERVAL_MS=1500`  
+  UI refresh interval for session/client state  
+
+---
 
 ## Reverse Proxy (Nginx Proxy Manager)
 
-Use one HTTPS domain and route:
+Use a single HTTPS domain.
 
-- Proxy Host:
-: domain -> app `http://<server-ip>:3000`
-: websocket support ON
-: force SSL ON
+### Proxy host
 
-- Custom Location:
-: `/ws` -> `http://<server-ip>:3001`
-: websocket support ON
+- Domain → `http://<server-ip>:3000`  
+- WebSocket support: ON  
+- Force SSL: ON  
 
-App config:
+### Custom location
 
-- `WS_PUBLIC_PATH=/ws`
-- keep `WS_PUBLIC_URL=` empty unless you want explicit override.
-- set `ACCESS_PIN=` to require a passphrase for client websocket access.
+- `/ws` → `http://<server-ip>:3001`  
+- WebSocket support: ON  
+
+### App config
+
+```bash
+WS_PUBLIC_PATH=/ws
+WS_PUBLIC_URL=
+ACCESS_PIN=your-secret
+```
+
+---
 
 ## Notes
 
-- Clipboard browser APIs can be restricted on plain HTTP depending on browser policy.
-- Textbox syncing still works even when direct clipboard read/write is blocked.
-- If a client IP resolves to a Docker bridge address, set `Device IP` in the UI and save identity.
-- For full clipboard read/write on remote devices, use HTTPS (or localhost).
-- WebSocket auth uses a signed short-lived token in the query string, so still prefer HTTPS/WSS to protect session tokens in transit.
+- Clipboard APIs may be restricted on plain HTTP depending on browser policy  
+- Sync still works even if direct clipboard access is blocked  
+- For full clipboard support, use HTTPS or localhost  
+- If Docker networking shows the wrong IP, you can override it in the UI  
+- WebSocket auth uses short-lived tokens — use HTTPS/WSS to protect them  
 
+---
+
+## Summary
+
+QuickRelay is built to stay simple:
+
+- copy text  
+- see it instantly on another device  
+- keep everything inside your LAN  
+- run it anywhere with Docker  
+
+No accounts, no external services, no unnecessary complexity.
