@@ -975,11 +975,6 @@ export default function Index() {
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-primary/10 via-transparent to-transparent" />
-      <div className="pointer-events-none absolute -top-24 left-[-8rem] h-72 w-72 rounded-full bg-sky-400/20 blur-3xl dark:bg-sky-500/20" />
-      <div className="pointer-events-none absolute right-[-6rem] top-24 h-80 w-80 rounded-full bg-teal-300/20 blur-3xl dark:bg-cyan-400/15" />
-      <div className="pointer-events-none absolute bottom-[-8rem] left-1/3 h-80 w-80 rounded-full bg-amber-200/30 blur-3xl dark:bg-indigo-500/15" />
-
       {isAuthLocked ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
           <div className="w-full max-w-md rounded-[32px] border border-border/70 bg-card/95 p-6 shadow-[0_28px_70px_rgba(15,23,42,0.25)] sm:p-7">

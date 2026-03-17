@@ -53,9 +53,13 @@
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(circle at 12% 18%, hsl(196 100% 78% / 0.24), transparent 30%),
-      radial-gradient(circle at 84% 10%, hsl(217 100% 78% / 0.18), transparent 34%),
-      linear-gradient(160deg, hsl(212 60% 99%), hsl(200 41% 96%));
+      radial-gradient(circle at 14% 16%, hsl(194 100% 80% / 0.22), transparent 28%),
+      radial-gradient(circle at 82% 12%, hsl(214 100% 80% / 0.16), transparent 30%),
+      radial-gradient(circle at 50% 100%, hsl(186 70% 78% / 0.08), transparent 34%),
+      linear-gradient(180deg, hsl(210 45% 98%), hsl(203 38% 95%) 48%, hsl(210 36% 96%) 100%);
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+    background-size: 100% 100%;
     min-height: 100vh;
     transition:
       background-color 180ms ease,
@@ -65,9 +69,9 @@
 
   .dark body {
     background-image:
-      radial-gradient(circle at 14% 18%, hsl(194 90% 58% / 0.18), transparent 26%),
-      radial-gradient(circle at 84% 8%, hsl(264 80% 60% / 0.16), transparent 30%),
-      linear-gradient(165deg, hsl(224 35% 12%), hsl(219 28% 10%));
+      radial-gradient(120% 90% at 14% 18%, hsl(194 84% 58% / 0.14), transparent 52%),
+      radial-gradient(115% 88% at 86% 12%, hsl(256 80% 64% / 0.12), transparent 48%),
+      linear-gradient(180deg, hsl(223 31% 12%) 0%, hsl(222 30% 12%) 100%);
   }
 
   input,
