@@ -25,21 +25,21 @@
 
   .dark {
     color-scheme: dark;
-    --background: 223 32% 10%;
-    --foreground: 210 20% 94%;
-    --card: 222 28% 14%;
-    --card-foreground: 210 20% 94%;
-    --primary: 199 95% 66%;
-    --primary-foreground: 223 42% 10%;
-    --muted: 222 21% 20%;
-    --muted-foreground: 216 14% 73%;
-    --accent: 262 38% 22%;
-    --accent-foreground: 210 30% 94%;
-    --border: 219 20% 28%;
-    --input: 219 19% 33%;
-    --ring: 199 95% 66%;
-    --success: 156 65% 54%;
-    --warning: 29 92% 61%;
+    --background: 221 24% 11%;
+    --foreground: 210 18% 92%;
+    --card: 222 21% 15%;
+    --card-foreground: 210 18% 92%;
+    --primary: 201 78% 62%;
+    --primary-foreground: 221 32% 10%;
+    --muted: 223 18% 19%;
+    --muted-foreground: 216 12% 70%;
+    --accent: 221 18% 20%;
+    --accent-foreground: 210 18% 92%;
+    --border: 221 16% 25%;
+    --input: 221 15% 30%;
+    --ring: 201 78% 62%;
+    --success: 156 55% 50%;
+    --warning: 31 86% 60%;
   }
 
   * {
@@ -69,9 +69,9 @@
 
   .dark body {
     background-image:
-      radial-gradient(120% 90% at 14% 18%, hsl(194 84% 58% / 0.14), transparent 52%),
-      radial-gradient(115% 88% at 86% 12%, hsl(256 80% 64% / 0.12), transparent 48%),
-      linear-gradient(180deg, hsl(223 31% 12%) 0%, hsl(222 30% 12%) 100%);
+      radial-gradient(95% 80% at 18% 14%, hsl(203 62% 55% / 0.08), transparent 56%),
+      radial-gradient(85% 72% at 84% 10%, hsl(223 34% 30% / 0.08), transparent 52%),
+      linear-gradient(180deg, hsl(221 24% 12%) 0%, hsl(221 22% 11%) 100%);
   }
 
   input,
