@@ -2,7 +2,7 @@
 
 QuickRelay is a simple LAN clipboard tool.
 
-Open it on two devices, paste text into one, and it shows up on the others instantly. No accounts, no cloud — just real-time sync on your local network.
+Open it on two or more devices, paste text into one, and it shows up on the others instantly. No accounts, no cloud, just real-time sync on your local network.
 
 ---
 
