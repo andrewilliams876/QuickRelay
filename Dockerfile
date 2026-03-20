@@ -1,5 +1,6 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
+RUN apk add --no-cache python3 make g++
 COPY package.json ./
 RUN npm install
 
@@ -16,6 +17,8 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV WS_PORT=3001
 ENV WS_HOST=0.0.0.0
+ENV HISTORY_DB_PATH=/data/quickrelay-history.sqlite
+ENV MAX_HISTORY_ITEMS=50
 
 COPY --from=builder /app ./
 

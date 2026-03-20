@@ -5,12 +5,21 @@ import os from "node:os";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { issueWsAccessToken, verifyWsAccessToken } from "./app/lib/access-token.server";
+import {
+  appendHistoryEntry,
+  clearHistoryEntries,
+  getHistoryDbPath,
+  getMaxHistoryItems,
+  listHistoryEntries,
+  type ClipboardHistoryEntry
+} from "./app/lib/history-store.server";
 
 type ClipboardUpdateMessage = {
   type: "clipboard_update";
   text: string;
   clientId: string;
   timestamp: number;
+  persistToHistory?: boolean;
   messageId?: string;
   originServerId?: string;
 };
@@ -31,6 +40,27 @@ type ClientHelloMessage = {
   clientId: string;
   clientName: string;
   clientIpHint?: string;
+};
+
+type HistorySnapshotMessage = {
+  type: "history_snapshot";
+  entries: ClipboardHistoryEntry[];
+  maxItems: number;
+};
+
+type HistoryAppendMessage = {
+  type: "history_append";
+  entry: ClipboardHistoryEntry;
+};
+
+type HistoryClearMessage = {
+  type: "history_clear";
+  clearedAt: number;
+};
+
+type HistoryTruncateMessage = {
+  type: "history_truncate";
+  removedIds: string[];
 };
 
 type DiscoveryPacket = {
@@ -106,6 +136,7 @@ const discoveryPeerTtlMs = Number(process.env.DISCOVERY_PEER_TTL_MS ?? 15000);
 const peerReconnectMs = Number(process.env.PEER_RECONNECT_MS ?? 3000);
 const seenMessageTtlMs = Number(process.env.SEEN_MESSAGE_TTL_MS ?? 120000);
 const clusterStateIntervalMs = Number(process.env.CLUSTER_STATE_INTERVAL_MS ?? 1500);
+const historyLimit = getMaxHistoryItems();
 const serverId = process.env.SERVER_ID ?? makeId();
 const accessPin = (process.env.ACCESS_PIN ?? "").trim();
 const authRequired = accessPin.length > 0;
@@ -236,6 +267,7 @@ function getRemoteIp(request: IncomingMessage) {
   }
   return normalizeAddress(request.socket.remoteAddress ?? "unknown");
 }
+
 function isAuthorizedWsRequest(request: IncomingMessage) {
   if (!authRequired) {
     return true;
@@ -389,7 +421,8 @@ function isClipboardUpdateMessage(input: unknown): input is ClipboardUpdateMessa
     payload.type === "clipboard_update" &&
     typeof payload.text === "string" &&
     typeof payload.clientId === "string" &&
-    typeof payload.timestamp === "number"
+    typeof payload.timestamp === "number" &&
+    (payload.persistToHistory === undefined || typeof payload.persistToHistory === "boolean")
   );
 }
 
@@ -412,6 +445,14 @@ function isClientHelloMessage(input: unknown): input is ClientHelloMessage {
     typeof payload.clientName === "string" &&
     (payload.clientIpHint === undefined || typeof payload.clientIpHint === "string")
   );
+}
+
+function isHistoryClearMessage(input: unknown): input is HistoryClearMessage {
+  if (typeof input !== "object" || input === null) {
+    return false;
+  }
+  const payload = input as Partial<HistoryClearMessage>;
+  return payload.type === "history_clear";
 }
 
 function isDiscoveryPacket(input: unknown): input is DiscoveryPacket {
@@ -630,11 +671,26 @@ function buildClusterState(): ClusterStateMessage {
   };
 }
 
+function buildHistorySnapshot(): HistorySnapshotMessage {
+  return {
+    type: "history_snapshot",
+    entries: listHistoryEntries(historyLimit),
+    maxItems: historyLimit
+  };
+}
+
 function sendClusterStateToClient(socket: WebSocket) {
   if (socketRoles.get(socket) !== "client") {
     return;
   }
   sendJson(socket, buildClusterState());
+}
+
+function sendHistorySnapshotToClient(socket: WebSocket) {
+  if (socketRoles.get(socket) !== "client") {
+    return;
+  }
+  sendJson(socket, buildHistorySnapshot());
 }
 
 function broadcastClusterState() {
@@ -644,6 +700,48 @@ function broadcastClusterState() {
       continue;
     }
     sendJson(socket, state);
+  }
+}
+
+function broadcastHistoryAppend(entry: ClipboardHistoryEntry) {
+  const payload: HistoryAppendMessage = {
+    type: "history_append",
+    entry
+  };
+  for (const socket of inboundSockets) {
+    if (socketRoles.get(socket) !== "client") {
+      continue;
+    }
+    sendJson(socket, payload);
+  }
+}
+
+function broadcastHistoryClear() {
+  const payload: HistoryClearMessage = {
+    type: "history_clear",
+    clearedAt: Date.now()
+  };
+  for (const socket of inboundSockets) {
+    if (socketRoles.get(socket) !== "client") {
+      continue;
+    }
+    sendJson(socket, payload);
+  }
+}
+
+function broadcastHistoryTruncate(removedIds: string[]) {
+  if (removedIds.length === 0) {
+    return;
+  }
+  const payload: HistoryTruncateMessage = {
+    type: "history_truncate",
+    removedIds
+  };
+  for (const socket of inboundSockets) {
+    if (socketRoles.get(socket) !== "client") {
+      continue;
+    }
+    sendJson(socket, payload);
   }
 }
 
@@ -691,9 +789,29 @@ function applyClipboardMessage(message: ClipboardUpdateMessage, sourceSocket?: W
   totalMessages += 1;
   latestMessage = normalized;
   touchPeerByServerId(normalized.originServerId);
+
+  const shouldPersistToHistory = normalized.persistToHistory !== false;
+  const historyWrite = shouldPersistToHistory
+    ? appendHistoryEntry({
+        id: normalized.messageId,
+        text: normalized.text,
+        createdAt: normalized.timestamp,
+        sourceClientId: normalized.clientId
+      })
+    : null;
+
   broadcastToLocalClients(normalized, sourceSocket);
   broadcastToPeerServers(normalized, sourceSocket);
+  if (shouldPersistToHistory && historyWrite) {
+    broadcastHistoryAppend(historyWrite.entry);
+    broadcastHistoryTruncate(historyWrite.removedIds);
+  }
   broadcastClusterState();
+}
+
+function clearHistoryForClients() {
+  clearHistoryEntries();
+  broadcastHistoryClear();
 }
 
 function cleanupSocket(socket: WebSocket) {
@@ -722,6 +840,7 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
   if (latestMessage) {
     sendJson(socket, latestMessage);
   }
+  sendHistorySnapshotToClient(socket);
   sendClusterStateToClient(socket);
   broadcastClusterState();
 
@@ -783,6 +902,14 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
       return;
     }
 
+    if (isHistoryClearMessage(parsed)) {
+      if (socketRoles.get(socket) !== "client") {
+        return;
+      }
+      clearHistoryForClients();
+      return;
+    }
+
     if (!isClipboardUpdateMessage(parsed)) {
       return;
     }
@@ -809,7 +936,6 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
   });
 }
 
-
 function buildPeerWebSocketUrl(host: string, port: number) {
   const url = new URL(`ws://${host}:${port}`);
   if (authRequired) {
@@ -820,6 +946,7 @@ function buildPeerWebSocketUrl(host: string, port: number) {
   }
   return url.toString();
 }
+
 function clearReconnectTimer(peerKey: string) {
   const timer = reconnectTimers.get(peerKey);
   if (!timer) {
@@ -998,6 +1125,7 @@ wsServer.on("connection", registerInboundSocketHandlers);
 
 wsServer.on("listening", () => {
   console.log(`[quickrelay] WebSocket server listening on ws://${wsHost}:${wsPort} (server ${serverId})`);
+  console.log(`[quickrelay] History database ready at ${getHistoryDbPath()} (max ${historyLimit} items)`);
 });
 
 wsServer.on("error", (error) => {
@@ -1051,4 +1179,3 @@ const shutdown = () => {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-

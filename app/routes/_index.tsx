@@ -1,18 +1,11 @@
 import type { MetaFunction } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle
-} from "../components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
 import { Textarea } from "../components/ui/textarea";
 
@@ -21,8 +14,37 @@ type ClipboardUpdateMessage = {
   text: string;
   clientId: string;
   timestamp: number;
+  persistToHistory?: boolean;
   messageId?: string;
   originServerId?: string;
+};
+
+type ClipboardHistoryEntry = {
+  id: string;
+  text: string;
+  createdAt: number;
+  sourceClientId: string;
+};
+
+type HistorySnapshotMessage = {
+  type: "history_snapshot";
+  entries: ClipboardHistoryEntry[];
+  maxItems: number;
+};
+
+type HistoryAppendMessage = {
+  type: "history_append";
+  entry: ClipboardHistoryEntry;
+};
+
+type HistoryClearMessage = {
+  type: "history_clear";
+  clearedAt: number;
+};
+
+type HistoryTruncateMessage = {
+  type: "history_truncate";
+  removedIds: string[];
 };
 
 type ClusterLocalNode = {
@@ -59,7 +81,13 @@ type ClusterStateMessage = {
 
 type PermissionLevel = "checking" | "granted" | "limited" | "blocked";
 type ThemeMode = "light" | "dark";
-type WsInboundMessage = ClipboardUpdateMessage | ClusterStateMessage;
+type WsInboundMessage =
+  | ClipboardUpdateMessage
+  | ClusterStateMessage
+  | HistorySnapshotMessage
+  | HistoryAppendMessage
+  | HistoryClearMessage
+  | HistoryTruncateMessage;
 
 type AccessTokenApiResponse = {
   token?: string;
@@ -68,16 +96,15 @@ type AccessTokenApiResponse = {
   error?: string;
 };
 
-export const meta: MetaFunction = () => {
-  return [{ title: "QuickRelay | Sync Text Between PCs" }];
-};
+export const meta: MetaFunction = () => [{ title: "QuickRelay | Scratchpad + History" }];
 
 export async function loader() {
   return json({
     wsPort: process.env.WS_PORT ?? "3001",
     wsPublicPath: process.env.WS_PUBLIC_PATH ?? "",
     wsPublicUrl: process.env.WS_PUBLIC_URL ?? "",
-    authRequired: Boolean((process.env.ACCESS_PIN ?? "").trim())
+    authRequired: Boolean((process.env.ACCESS_PIN ?? "").trim()),
+    maxHistoryItems: Number(process.env.MAX_HISTORY_ITEMS ?? 50)
   });
 }
 
@@ -97,16 +124,7 @@ function resolveWebSocketUrl({
 
 function isIpv4Host(hostname: string) {
   const parts = hostname.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  return parts.every((part) => {
-    if (!/^\d{1,3}$/.test(part)) {
-      return false;
-    }
-    const value = Number(part);
-    return value >= 0 && value <= 255;
-  });
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
 }
 
 function isDirectHost(hostname: string) {
@@ -165,9 +183,7 @@ function buildWebSocketCandidates({
   const directUrl = `${protocol}://${window.location.hostname}:${wsPort}`;
   const trimmedPublicPath = wsPublicPath.trim();
   if (trimmedPublicPath && !isDirectHost(window.location.hostname)) {
-    const normalizedPath = trimmedPublicPath.startsWith("/")
-      ? trimmedPublicPath
-      : `/${trimmedPublicPath}`;
+    const normalizedPath = trimmedPublicPath.startsWith("/") ? trimmedPublicPath : `/${trimmedPublicPath}`;
     candidates.push(`${protocol}://${window.location.host}${normalizedPath}`);
     if (!candidates.includes(directUrl)) {
       candidates.push(directUrl);
@@ -194,9 +210,7 @@ function sanitizeWsUrlForDisplay(urlValue: string) {
 async function requestAccessTokenFromPin(pin: string) {
   const response = await fetch("/api/access-token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pin: pin.trim() })
   });
 
@@ -210,11 +224,9 @@ async function requestAccessTokenFromPin(pin: string) {
     throw new Error("Access token was not issued by server.");
   }
 
-  return {
-    token,
-    expiresAt: payload?.expiresAt ?? null
-  };
+  return { token, expiresAt: payload?.expiresAt ?? null };
 }
+
 function makeClientId() {
   if (typeof globalThis.crypto !== "undefined" && "randomUUID" in globalThis.crypto) {
     return globalThis.crypto.randomUUID();
@@ -224,9 +236,7 @@ function makeClientId() {
 
 function makeDefaultClientName() {
   const platform =
-    typeof navigator !== "undefined" && navigator.platform
-      ? navigator.platform.replace(/\s+/g, "")
-      : "Client";
+    typeof navigator !== "undefined" && navigator.platform ? navigator.platform.replace(/\s+/g, "") : "Client";
   const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
   return `${platform}-${suffix}`;
 }
@@ -256,8 +266,7 @@ async function detectDeviceIp(): Promise<string | null> {
       if (!text) {
         return;
       }
-      const regex = /(\d{1,3}(?:\.\d{1,3}){3})/g;
-      const matches = text.match(regex) ?? [];
+      const matches = text.match(/(\d{1,3}(?:\.\d{1,3}){3})/g) ?? [];
       for (const candidate of matches) {
         if (isValidClientIp(candidate)) {
           ips.add(candidate);
@@ -282,9 +291,7 @@ async function detectDeviceIp(): Promise<string | null> {
     void pc
       .createOffer()
       .then((offer) => pc.setLocalDescription(offer))
-      .then(() => {
-        captureIps(pc.localDescription?.sdp);
-      })
+      .then(() => captureIps(pc.localDescription?.sdp))
       .catch(() => {
         cleanup();
         resolve(null);
@@ -294,31 +301,21 @@ async function detectDeviceIp(): Promise<string | null> {
 
 function isValidClientIp(raw: string) {
   const value = raw.trim();
-  const match = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/);
-  if (!match) {
+  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) {
     return false;
   }
   const octets = value.split(".").map((part) => Number(part));
-  if (octets.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  if (value === "0.0.0.0" || value.startsWith("127.") || value.startsWith("169.254.")) {
-    return false;
-  }
-  return true;
+  return !octets.some((part) => Number.isNaN(part) || part < 0 || part > 255) &&
+    value !== "0.0.0.0" &&
+    !value.startsWith("127.") &&
+    !value.startsWith("169.254.");
 }
 
 function scoreIp(ip: string) {
-  if (ip.startsWith("10.")) {
-    return 50;
-  }
-  if (ip.startsWith("192.168.")) {
-    return 45;
-  }
+  if (ip.startsWith("10.")) return 50;
+  if (ip.startsWith("192.168.")) return 45;
   const secondOctet = Number(ip.split(".")[1] ?? "0");
-  if (ip.startsWith("172.") && secondOctet >= 16 && secondOctet <= 31) {
-    return 40;
-  }
+  if (ip.startsWith("172.") && secondOctet >= 16 && secondOctet <= 31) return 40;
   return 20;
 }
 
@@ -326,8 +323,7 @@ function selectBestIp(ips: string[]) {
   if (ips.length === 0) {
     return null;
   }
-  const sorted = [...ips].sort((left, right) => scoreIp(right) - scoreIp(left));
-  return sorted[0] ?? null;
+  return [...ips].sort((left, right) => scoreIp(right) - scoreIp(left))[0] ?? null;
 }
 
 function getSystemThemeMode(): ThemeMode {
@@ -345,8 +341,53 @@ function getInitialThemeMode(): ThemeMode {
   return storedTheme === "dark" || storedTheme === "light" ? storedTheme : getSystemThemeMode();
 }
 
+function formatHistoryTimestamp(timestamp: number) {
+  return new Date(timestamp).toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
+}
+
+function renderMarkdownSegment(segment: string, keyPrefix: string) {
+  return segment.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((token, index) => {
+    if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
+      return <strong key={`${keyPrefix}-bold-${index}`}>{token.slice(2, -2)}</strong>;
+    }
+    if (token.startsWith("*") && token.endsWith("*") && token.length > 2) {
+      return <em key={`${keyPrefix}-italic-${index}`}>{token.slice(1, -1)}</em>;
+    }
+    return <Fragment key={`${keyPrefix}-text-${index}`}>{token}</Fragment>;
+  });
+}
+
+function renderHistoryMarkdown(text: string) {
+  return text.split("\n").map((line, lineIndex, lines) => (
+    <Fragment key={`line-${lineIndex}`}>
+      {line.split(/(https?:\/\/[^\s]+)/g).filter(Boolean).map((segment, segmentIndex) => {
+        if (/^https?:\/\/[^\s]+$/.test(segment)) {
+          return (
+            <a
+              key={`line-${lineIndex}-url-${segmentIndex}`}
+              href={segment}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-primary underline decoration-primary/40 underline-offset-4"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {segment}
+            </a>
+          );
+        }
+        return (
+          <Fragment key={`line-${lineIndex}-segment-${segmentIndex}`}>
+            {renderMarkdownSegment(segment, `line-${lineIndex}-segment-${segmentIndex}`)}
+          </Fragment>
+        );
+      })}
+      {lineIndex < lines.length - 1 ? <br /> : null}
+    </Fragment>
+  ));
+}
+
 export default function Index() {
-  const { wsPort, wsPublicPath, wsPublicUrl, authRequired } = useLoaderData<typeof loader>();
+  const { wsPort, wsPublicPath, wsPublicUrl, authRequired, maxHistoryItems } = useLoaderData<typeof loader>();
 
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
   const [clipboardText, setClipboardText] = useState("");
@@ -369,10 +410,14 @@ export default function Index() {
   const [showAccessPin, setShowAccessPin] = useState(false);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [historyEntries, setHistoryEntries] = useState<ClipboardHistoryEntry[]>([]);
+  const [isHistoryClearing, setIsHistoryClearing] = useState(false);
+  const [historyColumnHeight, setHistoryColumnHeight] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const clipboardPollRef = useRef<number | null>(null);
+  const liveMirrorTimerRef = useRef<number | null>(null);
   const lastClipboardRef = useRef("");
   const skipBroadcastUntilRef = useRef(0);
   const clientIdRef = useRef("");
@@ -382,44 +427,41 @@ export default function Index() {
   const lastUserEditAtRef = useRef(0);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
   const manualLockRef = useRef(false);
+  const connectAttemptRef = useRef(0);
+  const scratchpadCardRef = useRef<HTMLDivElement | null>(null);
 
   const wsUrl = useMemo(() => {
     const effectiveAccessToken = authRequired ? accessToken : "";
     return resolveWebSocketUrl({ wsPort, wsPublicPath, wsPublicUrl, accessToken: effectiveAccessToken });
   }, [accessToken, authRequired, wsPort, wsPublicPath, wsPublicUrl]);
+
   const wsCandidates = useMemo(() => {
     const effectiveAccessToken = authRequired ? accessToken : "";
-    return buildWebSocketCandidates({
-      wsPort,
-      wsPublicPath,
-      wsPublicUrl,
-      accessToken: effectiveAccessToken
-    });
+    return buildWebSocketCandidates({ wsPort, wsPublicPath, wsPublicUrl, accessToken: effectiveAccessToken });
   }, [accessToken, authRequired, wsPort, wsPublicPath, wsPublicUrl]);
-  const connectAttemptRef = useRef(0);
+
   const [activeWsUrl, setActiveWsUrl] = useState("");
 
-  const sendClipboard = useCallback((text: string) => {
+  const sendClipboard = useCallback((text: string, options?: { persistToHistory?: boolean }) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return;
+      return false;
     }
     const payload: ClipboardUpdateMessage = {
       type: "clipboard_update",
       text,
       clientId: clientIdRef.current,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      persistToHistory: options?.persistToHistory
     };
     ws.send(JSON.stringify(payload));
     setLocalMessagesSent((value) => value + 1);
+    return true;
   }, []);
 
   const sendClientHello = useCallback(() => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    if (!clientIdRef.current || !clientNameRef.current) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !clientIdRef.current || !clientNameRef.current) {
       return;
     }
     const payload: ClientHelloMessage = {
@@ -431,80 +473,157 @@ export default function Index() {
     ws.send(JSON.stringify(payload));
   }, []);
 
+  const persistAccessToken = useCallback((token: string, pinValue?: string) => {
+    const cleanedToken = token.trim();
+    const cleanedPin = pinValue?.trim() ?? "";
 
-  const persistAccessToken = useCallback(
-    (token: string, pinValue?: string) => {
-      const cleanedToken = token.trim();
-      const cleanedPin = pinValue?.trim() ?? "";
+    accessTokenRef.current = cleanedToken;
+    setAccessToken(cleanedToken);
+    setAuthGateLocked(authRequired && !cleanedToken);
 
-      accessTokenRef.current = cleanedToken;
-      setAccessToken(cleanedToken);
-      setAuthGateLocked(authRequired && !cleanedToken);
-
-      if (typeof window !== "undefined") {
-        if (cleanedToken) {
-          window.sessionStorage.setItem("quickRelayAccessToken", cleanedToken);
-          if (pinValue !== undefined) {
-            if (cleanedPin) {
-              window.sessionStorage.setItem("quickRelayAccessPin", cleanedPin);
-            } else {
-              window.sessionStorage.removeItem("quickRelayAccessPin");
-            }
+    if (typeof window !== "undefined") {
+      if (cleanedToken) {
+        window.sessionStorage.setItem("quickRelayAccessToken", cleanedToken);
+        if (pinValue !== undefined) {
+          if (cleanedPin) {
+            window.sessionStorage.setItem("quickRelayAccessPin", cleanedPin);
+          } else {
+            window.sessionStorage.removeItem("quickRelayAccessPin");
           }
-        } else {
-          window.sessionStorage.removeItem("quickRelayAccessToken");
-          window.sessionStorage.removeItem("quickRelayAccessPin");
-          window.localStorage.removeItem("quickRelayAccessToken");
         }
+      } else {
+        window.sessionStorage.removeItem("quickRelayAccessToken");
+        window.sessionStorage.removeItem("quickRelayAccessPin");
+        window.localStorage.removeItem("quickRelayAccessToken");
       }
-    },
-    [authRequired]
-  );
+    }
+  }, [authRequired]);
 
-  const exchangeAccessPinForToken = useCallback(
-    async (pinCandidate: string) => {
-      if (!authRequired) {
-        setAuthError("");
-        persistAccessToken("", "");
-        return true;
-      }
-
-      const cleanedPin = pinCandidate.trim();
-      if (!cleanedPin) {
-        setAuthError("Enter ACCESS_PIN to continue.");
-        setAuthGateLocked(true);
-        setStatusText("ACCESS_PIN required before this client can join sync.");
-        return false;
-      }
-
-      const previousToken = accessTokenRef.current.trim();
-      setIsAuthSubmitting(true);
+  const exchangeAccessPinForToken = useCallback(async (pinCandidate: string) => {
+    if (!authRequired) {
       setAuthError("");
+      persistAccessToken("", "");
+      return true;
+    }
 
-      try {
-        const issued = await requestAccessTokenFromPin(cleanedPin);
-        persistAccessToken(issued.token, cleanedPin);
-        setAccessPinInput(cleanedPin);
+    const cleanedPin = pinCandidate.trim();
+    if (!cleanedPin) {
+      setAuthError("Enter ACCESS_PIN to continue.");
+      setAuthGateLocked(true);
+      setStatusText("ACCESS_PIN required before this client can join sync.");
+      return false;
+    }
+
+    const previousToken = accessTokenRef.current.trim();
+    setIsAuthSubmitting(true);
+    setAuthError("");
+
+    try {
+      const issued = await requestAccessTokenFromPin(cleanedPin);
+      persistAccessToken(issued.token, cleanedPin);
+      setAccessPinInput(cleanedPin);
+      setAuthGateLocked(false);
+      setStatusText("Access PIN accepted. Connecting to QuickRelay...");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid access PIN.";
+      if (!previousToken) {
+        persistAccessToken("", "");
+        setAuthGateLocked(true);
+      } else {
         setAuthGateLocked(false);
-        setStatusText("Access PIN accepted. Connecting to QuickRelay...");
-        return true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Invalid access PIN.";
-        if (!previousToken) {
-          persistAccessToken("", "");
-          setAuthGateLocked(true);
-        } else {
-          setAuthGateLocked(false);
-        }
-        setAuthError(message);
-        setStatusText(message);
-        return false;
-      } finally {
-        setIsAuthSubmitting(false);
       }
-    },
-    [authRequired, persistAccessToken]
-  );
+      setAuthError(message);
+      setStatusText(message);
+      return false;
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }, [authRequired, persistAccessToken]);
+
+  const writeClipboardText = useCallback(async (text: string) => {
+    if (!navigator.clipboard?.writeText) {
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const handleScratchpadChange = useCallback((value: string) => {
+    setClipboardText(value);
+    lastClipboardRef.current = value;
+    skipBroadcastUntilRef.current = 0;
+    lastUserEditAtRef.current = Date.now();
+    if (liveMirrorTimerRef.current !== null) {
+      window.clearTimeout(liveMirrorTimerRef.current);
+    }
+    liveMirrorTimerRef.current = window.setTimeout(() => {
+      sendClipboard(value, { persistToHistory: false });
+    }, 140);
+    setStatusText("Scratchpad is mirroring live. Use Share + Save when you want to add a history entry.");
+  }, [sendClipboard]);
+
+  const handleShareScratchpad = useCallback(async () => {
+    const value = clipboardText.replace(/\r\n/g, "\n");
+    if (!value.trim()) {
+      setStatusText("Add some text to the scratchpad before sharing it.");
+      return;
+    }
+
+    if (liveMirrorTimerRef.current !== null) {
+      window.clearTimeout(liveMirrorTimerRef.current);
+      liveMirrorTimerRef.current = null;
+    }
+
+    lastClipboardRef.current = value;
+    skipBroadcastUntilRef.current = 0;
+    lastUserEditAtRef.current = Date.now();
+
+    const copied = await writeClipboardText(value);
+    const sent = sendClipboard(value, { persistToHistory: true });
+
+    setStatusText(
+      sent
+        ? copied
+          ? "Scratchpad shared and saved to history."
+          : "Scratchpad shared and saved, but clipboard write is blocked locally."
+        : "Scratchpad updated locally. Connect to sync and save it to history."
+    );
+  }, [clipboardText, sendClipboard, writeClipboardText]);
+
+  const handleReuseHistoryItem = useCallback(async (entry: ClipboardHistoryEntry) => {
+    setClipboardText(entry.text);
+    lastClipboardRef.current = entry.text;
+    skipBroadcastUntilRef.current = 0;
+    lastUserEditAtRef.current = Date.now();
+    const copied = await writeClipboardText(entry.text);
+    setStatusText(
+      copied
+        ? "History entry restored to the scratchpad. Share it when you're ready to save a fresh entry."
+        : "History entry restored locally. Share it when you're ready to save a fresh entry."
+    );
+  }, [writeClipboardText]);
+
+  const handleCopyHistoryItem = useCallback(async (entry: ClipboardHistoryEntry) => {
+    lastClipboardRef.current = entry.text;
+    lastUserEditAtRef.current = Date.now();
+    const copied = await writeClipboardText(entry.text);
+    setStatusText(copied ? "History entry copied to the local clipboard." : "Clipboard write is blocked on this page.");
+  }, [writeClipboardText]);
+
+  const handleClearHistory = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setStatusText("Connect to the sync server before clearing shared history.");
+      return;
+    }
+    setIsHistoryClearing(true);
+    ws.send(JSON.stringify({ type: "history_clear" }));
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -582,13 +701,73 @@ export default function Index() {
     if (authRequired) {
       return;
     }
-
     setShowAccessPin(false);
     setAuthError("");
     setIsAuthSubmitting(false);
     setAccessPinInput("");
     persistAccessToken("", "");
   }, [authRequired, persistAccessToken]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const scratchpadCard = scratchpadCardRef.current;
+    if (!scratchpadCard) {
+      return;
+    }
+
+    const desktopMediaQuery = window.matchMedia("(min-width: 1280px)");
+    let animationFrame = 0;
+
+    const syncHistoryHeight = () => {
+      if (!desktopMediaQuery.matches) {
+        setHistoryColumnHeight(null);
+        return;
+      }
+
+      const nextHeight = Math.round(scratchpadCard.getBoundingClientRect().height);
+      setHistoryColumnHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
+    };
+
+    const scheduleSync = () => {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(syncHistoryHeight);
+    };
+
+    const resizeObserver = new ResizeObserver(scheduleSync);
+    resizeObserver.observe(scratchpadCard);
+
+    const handleViewportChange = () => scheduleSync();
+
+    scheduleSync();
+    window.addEventListener("resize", handleViewportChange);
+    if (typeof desktopMediaQuery.addEventListener === "function") {
+      desktopMediaQuery.addEventListener("change", handleViewportChange);
+    } else {
+      desktopMediaQuery.addListener(handleViewportChange);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", handleViewportChange);
+      if (typeof desktopMediaQuery.removeEventListener === "function") {
+        desktopMediaQuery.removeEventListener("change", handleViewportChange);
+      } else {
+        desktopMediaQuery.removeListener(handleViewportChange);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (liveMirrorTimerRef.current !== null) {
+        window.clearTimeout(liveMirrorTimerRef.current);
+      }
+    };
+  }, []);
 
   const refreshPermissionState = useCallback(async () => {
     if (typeof navigator === "undefined") {
@@ -604,12 +783,8 @@ export default function Index() {
     }
 
     try {
-      const clipboardRead = await navigator.permissions.query({
-        name: "clipboard-read" as PermissionName
-      });
-      const clipboardWrite = await navigator.permissions.query({
-        name: "clipboard-write" as PermissionName
-      });
+      const clipboardRead = await navigator.permissions.query({ name: "clipboard-read" as PermissionName });
+      const clipboardWrite = await navigator.permissions.query({ name: "clipboard-write" as PermissionName });
       const states = [clipboardRead.state, clipboardWrite.state];
       if (states.every((state) => state === "granted")) {
         setPermissionLevel("granted");
@@ -625,34 +800,31 @@ export default function Index() {
     }
   }, []);
 
-  const applyRemoteClipboard = useCallback(
-    async (incomingText: string, timestamp: number, sourceClientId: string) => {
-      const previousTimestamp = lastTimestampByClientRef.current.get(sourceClientId) ?? 0;
-      if (timestamp < previousTimestamp) {
-        return;
-      }
-      lastTimestampByClientRef.current.set(sourceClientId, timestamp);
+  const applyRemoteClipboard = useCallback(async (incomingText: string, timestamp: number, sourceClientId: string) => {
+    const previousTimestamp = lastTimestampByClientRef.current.get(sourceClientId) ?? 0;
+    if (timestamp < previousTimestamp) {
+      return;
+    }
+    lastTimestampByClientRef.current.set(sourceClientId, timestamp);
 
-      lastClipboardRef.current = incomingText;
-      skipBroadcastUntilRef.current = Date.now() + 5_000;
-      lastUserEditAtRef.current = Date.now();
-      setClipboardText(incomingText);
-      setLastRemoteUpdate(new Date(timestamp).toLocaleTimeString());
+    lastClipboardRef.current = incomingText;
+    skipBroadcastUntilRef.current = Date.now() + 5_000;
+    lastUserEditAtRef.current = Date.now();
+    setClipboardText(incomingText);
+    setLastRemoteUpdate(new Date(timestamp).toLocaleTimeString());
 
-      if (!navigator.clipboard?.writeText) {
-        setStatusText("Remote text received. Clipboard write API is unavailable.");
-        return;
-      }
+    if (!navigator.clipboard?.writeText) {
+      setStatusText("Remote text received. Clipboard write API is unavailable.");
+      return;
+    }
 
-      try {
-        await navigator.clipboard.writeText(incomingText);
-        setStatusText("Remote clipboard update applied automatically.");
-      } catch {
-        setStatusText("Remote text received, but browser blocked clipboard write.");
-      }
-    },
-    []
-  );
+    try {
+      await navigator.clipboard.writeText(incomingText);
+      setStatusText("Remote clipboard update applied automatically.");
+    } catch {
+      setStatusText("Remote text received, but browser blocked clipboard write.");
+    }
+  }, []);
 
   const pollLocalClipboard = useCallback(async () => {
     if (!window.isSecureContext) {
@@ -673,17 +845,11 @@ export default function Index() {
 
     try {
       const text = await navigator.clipboard.readText();
-      if (text === lastClipboardRef.current) {
+      if (text === lastClipboardRef.current || (text === "" && lastClipboardRef.current !== "")) {
         return;
       }
-
-      if (text === "" && lastClipboardRef.current !== "") {
-        return;
-      }
-
       lastClipboardRef.current = text;
       setClipboardText(text);
-
       if (Date.now() >= skipBroadcastUntilRef.current) {
         sendClipboard(text);
         setStatusText("Local clipboard detected and shared.");
@@ -728,13 +894,9 @@ export default function Index() {
           const payload = JSON.parse(String(event.data)) as Partial<WsInboundMessage>;
           if (payload.type === "cluster_state") {
             setClusterServerId(typeof payload.serverId === "string" ? payload.serverId : null);
-            setClusterConnectedClients(
-              typeof payload.connectedClients === "number" ? payload.connectedClients : 0
-            );
+            setClusterConnectedClients(typeof payload.connectedClients === "number" ? payload.connectedClients : 0);
             setClusterMessagesSeen(typeof payload.totalMessages === "number" ? payload.totalMessages : 0);
-            setConnectedClients(
-              Array.isArray(payload.clients) ? (payload.clients as ClusterClient[]) : []
-            );
+            setConnectedClients(Array.isArray(payload.clients) ? (payload.clients as ClusterClient[]) : []);
             const incomingLocal = payload.localNode as Partial<ClusterLocalNode> | undefined;
             if (
               incomingLocal &&
@@ -744,9 +906,7 @@ export default function Index() {
             ) {
               setLocalNode({
                 displayAddress: incomingLocal.displayAddress,
-                addresses: incomingLocal.addresses.filter(
-                  (value): value is string => typeof value === "string"
-                ),
+                addresses: incomingLocal.addresses.filter((value): value is string => typeof value === "string"),
                 wsPort: incomingLocal.wsPort,
                 online: true
               });
@@ -757,13 +917,57 @@ export default function Index() {
             return;
           }
 
+          if (payload.type === "history_snapshot" && Array.isArray(payload.entries)) {
+            setHistoryEntries(
+              payload.entries.filter(
+                (entry): entry is ClipboardHistoryEntry =>
+                  typeof entry?.id === "string" &&
+                  typeof entry?.text === "string" &&
+                  typeof entry?.createdAt === "number" &&
+                  typeof entry?.sourceClientId === "string"
+              )
+            );
+            setIsHistoryClearing(false);
+            return;
+          }
+
+          if (payload.type === "history_append" && payload.entry) {
+            const entry = payload.entry as ClipboardHistoryEntry;
+            if (
+              typeof entry.id === "string" &&
+              typeof entry.text === "string" &&
+              typeof entry.createdAt === "number" &&
+              typeof entry.sourceClientId === "string"
+            ) {
+              setHistoryEntries((current) => {
+                if (current.some((existing) => existing.id === entry.id)) {
+                  return current;
+                }
+                return [entry, ...current].slice(0, maxHistoryItems);
+              });
+            }
+            return;
+          }
+
+          if (payload.type === "history_clear") {
+            setHistoryEntries([]);
+            setIsHistoryClearing(false);
+            setStatusText("Shared history cleared for this server.");
+            return;
+          }
+
+          if (payload.type === "history_truncate" && Array.isArray(payload.removedIds)) {
+            const removedIds = new Set(payload.removedIds.filter((value): value is string => typeof value === "string"));
+            if (removedIds.size > 0) {
+              setHistoryEntries((current) => current.filter((entry) => !removedIds.has(entry.id)));
+            }
+            return;
+          }
+
           if (payload.type !== "clipboard_update" || typeof payload.text !== "string") {
             return;
           }
-          if (payload.clientId === clientIdRef.current) {
-            return;
-          }
-          if (payload.text === lastClipboardRef.current) {
+          if (payload.clientId === clientIdRef.current || payload.text === lastClipboardRef.current) {
             return;
           }
           void applyRemoteClipboard(
@@ -780,14 +984,12 @@ export default function Index() {
         if (isCancelled) {
           return;
         }
-
         if (manualLockRef.current) {
           manualLockRef.current = false;
           setIsConnected(false);
           setStatusText("Session locked. Enter ACCESS_PIN to continue.");
           return;
         }
-
         setIsConnected(false);
         setStatusText(authRequired ? "Disconnected. Reconnecting (check ACCESS_PIN if this persists)..." : "Disconnected. Reconnecting...");
         setAuthGateLocked(authRequired && !accessTokenRef.current.trim());
@@ -830,7 +1032,7 @@ export default function Index() {
       }
       wsRef.current = null;
     };
-  }, [applyRemoteClipboard, authRequired, pollLocalClipboard, refreshPermissionState, sendClientHello, wsCandidates]);
+  }, [applyRemoteClipboard, authRequired, maxHistoryItems, pollLocalClipboard, refreshPermissionState, sendClientHello, wsCandidates]);
 
   const handleEnableClipboard = useCallback(async () => {
     try {
@@ -852,32 +1054,10 @@ export default function Index() {
     }
   }, [sendClipboard]);
 
-  const handleManualShare = useCallback(
-    async (value: string) => {
-      setClipboardText(value);
-      lastClipboardRef.current = value;
-      skipBroadcastUntilRef.current = 0;
-      lastUserEditAtRef.current = Date.now();
-
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(value);
-        }
-      } catch {
-        setStatusText("Shared to connected clients, but clipboard write is blocked locally.");
-      }
-
-      sendClipboard(value);
-      setStatusText("Shared text to connected clients.");
-    },
-    [sendClipboard]
-  );
-
   const handleSaveClientName = useCallback(async () => {
     if (typeof window === "undefined") {
       return;
     }
-
     const resolved = clientName.replace(/\s+/g, " ").trim().slice(0, 48) || makeDefaultClientName();
     const cleanedIp = deviceIp.trim();
     const cleanedPinInput = accessPinInput.trim();
@@ -892,7 +1072,6 @@ export default function Index() {
       if (!authenticated) {
         return;
       }
-
     }
 
     if (authRequired && !accessTokenRef.current.trim()) {
@@ -905,21 +1084,11 @@ export default function Index() {
     deviceIpRef.current = cleanedIp;
     setClientName(resolved);
     setDeviceIp(cleanedIp);
-
     window.localStorage.setItem("quickRelayClientName", resolved);
     window.localStorage.setItem("quickRelayDeviceIp", cleanedIp);
-
     sendClientHello();
     setStatusText(authRequired ? "Client identity and auth token updated." : "Client identity updated.");
-  }, [
-    accessPinInput,
-    authGateLocked,
-    authRequired,
-    clientName,
-    deviceIp,
-    exchangeAccessPinForToken,
-    sendClientHello
-  ]);
+  }, [accessPinInput, authGateLocked, authRequired, clientName, deviceIp, exchangeAccessPinForToken, sendClientHello]);
 
   const handlePinDialogSubmit = useCallback(async () => {
     await exchangeAccessPinForToken(accessPinInput);
@@ -933,7 +1102,6 @@ export default function Index() {
     persistAccessToken("", "");
     setAuthGateLocked(true);
     setStatusText("Session locked. Enter ACCESS_PIN to continue.");
-
     manualLockRef.current = true;
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
       wsRef.current.close();
@@ -942,11 +1110,9 @@ export default function Index() {
     setIsConnected(false);
   }, [persistAccessToken]);
 
-  const permissionBadgeVariant =
-    permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
+  const permissionBadgeVariant = permissionLevel === "granted" ? "success" : permissionLevel === "blocked" ? "warning" : "outline";
   const connectionBadgeVariant = isConnected ? "success" : "warning";
   const accessBadgeVariant = !authRequired ? "outline" : authGateLocked ? "warning" : "success";
-  const connectedClientCount = connectedClients.length;
   const isAuthLocked = authRequired && authGateLocked;
   const pageReady = !isAuthLocked;
   const displayStatus = sanitizeWsUrlForDisplay(activeWsUrl || wsUrl || `ws://<host>:${wsPort}`);
@@ -954,8 +1120,7 @@ export default function Index() {
     "h-12 rounded-2xl border border-border/70 bg-background/80 px-4 text-sm text-foreground shadow-sm transition placeholder:text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground/80 disabled:opacity-100";
 
   useEffect(() => {
-    const initialTheme = getInitialThemeMode();
-    setThemeMode(initialTheme);
+    setThemeMode(getInitialThemeMode());
   }, []);
 
   useEffect(() => {
@@ -989,22 +1154,7 @@ export default function Index() {
                 <h2 className="mt-4 text-2xl font-semibold tracking-tight text-card-foreground">Unlock QuickRelay</h2>
               </div>
               <Button type="button" variant="outline" size="sm" className="px-3" onClick={toggleThemeMode}>
-                {themeMode === "dark" ? (
-                  <span className="inline-flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <circle cx="12" cy="12" r="4" />
-                      <path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2.2M19.8 12H22M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" />
-                    </svg>
-                    Light
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" />
-                    </svg>
-                    Dark
-                  </span>
-                )}
+                {themeMode === "dark" ? "Light" : "Dark"}
               </Button>
             </div>
             <p className="text-sm leading-6 text-muted-foreground">
@@ -1019,37 +1169,15 @@ export default function Index() {
             >
               <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 Access PIN
-                <div className="relative">
-                  <input
-                    type={showAccessPin ? "text" : "password"}
-                    autoComplete="current-password"
-                    value={accessPinInput}
-                    onChange={(event) => setAccessPinInput(event.target.value)}
-                    autoFocus
-                    className={`${surfaceInputClassName} w-full pr-11`}
-                    placeholder="Enter ACCESS_PIN"
-                  />
-                  <button
-                    type="button"
-                    aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
-                    onClick={() => setShowAccessPin((value) => !value)}
-                    className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground"
-                  >
-                    {showAccessPin ? (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M3 3l18 18" />
-                        <path d="M10.6 10.6a2 2 0 002.8 2.8" />
-                        <path d="M9.9 4.2A10.5 10.5 0 0112 4c7 0 10 8 10 8a16.4 16.4 0 01-4 5.3" />
-                        <path d="M6.6 6.6A16.8 16.8 0 002 12s3 8 10 8a9.9 9.9 0 004.2-.9" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    )}
-                  </button>
-                </div>
+                <input
+                  type={showAccessPin ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={accessPinInput}
+                  onChange={(event) => setAccessPinInput(event.target.value)}
+                  autoFocus
+                  className={surfaceInputClassName}
+                  placeholder="Enter ACCESS_PIN"
+                />
               </label>
               {authError ? <p className="text-xs text-warning">{authError}</p> : null}
               <div className="flex justify-end gap-2 pt-1">
@@ -1062,9 +1190,7 @@ export default function Index() {
         </div>
       ) : null}
 
-      <section
-        className={`mx-auto flex w-full max-w-6xl flex-col gap-6 ${!pageReady ? "pointer-events-none select-none opacity-60" : ""}`}
-      >
+      <section className={`mx-auto flex w-full max-w-7xl flex-col gap-6 ${!pageReady ? "pointer-events-none select-none opacity-60" : ""}`}>
         <div className="flex flex-col gap-4 rounded-[32px] border border-border/60 bg-card/75 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-3">
@@ -1077,43 +1203,22 @@ export default function Index() {
                   </svg>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/80">Realtime clipboard relay</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/80">Realtime scratchpad relay</p>
                   <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">QuickRelay</h1>
                 </div>
               </div>
-              <p className="max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
-                Copy text on one machine and it syncs across connected clients in realtime with a cleaner, faster LAN clipboard workflow.
+              <p className="max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
+                Keep the live scratchpad in front of you while QuickRelay automatically builds a reusable history across the LAN.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 lg:justify-end">
               <Button type="button" variant="outline" className="min-w-[124px]" onClick={toggleThemeMode}>
-                {themeMode === "dark" ? (
-                  <span className="inline-flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <circle cx="12" cy="12" r="4" />
-                      <path d="M12 2v2.2M12 19.8V22M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2.2M19.8 12H22M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5" />
-                    </svg>
-                    Light mode
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z" />
-                    </svg>
-                    Dark mode
-                  </span>
-                )}
+                {themeMode === "dark" ? "Light mode" : "Dark mode"}
               </Button>
               {authRequired && !isAuthLocked ? (
                 <Button type="button" variant="secondary" className="min-w-[116px]" onClick={handleLockSession}>
-                  <span className="inline-flex items-center gap-2">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <rect x="5" y="11" width="14" height="9" rx="2" />
-                      <path d="M8 11V8a4 4 0 118 0v3" />
-                    </svg>
-                    Lock session
-                  </span>
+                  Lock session
                 </Button>
               ) : null}
             </div>
@@ -1133,17 +1238,18 @@ export default function Index() {
             <Badge variant={accessBadgeVariant}>
               {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
             </Badge>
+            <Badge variant="outline">{historyEntries.length}/{maxHistoryItems} history slots used</Badge>
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-          <Card className="overflow-hidden">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_280px_300px] xl:items-start">
+          <Card ref={scratchpadCardRef} className="overflow-hidden">
             <CardHeader className="gap-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <CardTitle>Clipboard Mirror</CardTitle>
+                  <CardTitle>Scratchpad</CardTitle>
                   <CardDescription>
-                    Live text surface for shared clipboard updates across every connected device.
+                    The live text surface stays editable, while history captures the meaningful states you share.
                   </CardDescription>
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-right shadow-sm">
@@ -1152,213 +1258,158 @@ export default function Index() {
                 </div>
               </div>
             </CardHeader>
-          <CardContent className="space-y-5">
-            <Textarea
-              id="clipboard-mirror"
-              value={clipboardText}
-              placeholder="Clipboard text appears here and syncs to all connected devices."
-              onChange={(event) => void handleManualShare(event.target.value)}
-              className="min-h-[240px] font-mono text-sm leading-7 sm:min-h-[280px]"
-            />
-
-            <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Connection details</p>
-                  <p className="text-xs text-muted-foreground">Current client, route, and server metadata.</p>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-muted/70 px-3 py-1.5 text-xs text-muted-foreground">
-                  <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-success" : "bg-warning"}`} />
-                  {isConnected ? "Online" : "Retrying"}
-                </div>
-              </div>
-              <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Status</p>
-                  <p className="mt-2 font-mono text-foreground">{statusText}</p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Server IP</p>
-                  <p className="mt-2 font-mono text-foreground">
-                    {localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">This device IP</p>
-                  <p className="mt-2 font-mono text-foreground">{deviceIp || "unavailable"}</p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Client name</p>
-                  <p className="mt-2 font-mono text-foreground">{clientName || "initializing..."}</p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Cluster server id</p>
-                  <p className="mt-2 break-all font-mono text-foreground">{clusterServerId ?? "initializing..."}</p>
-                </div>
-                <div className="rounded-2xl border border-border/60 bg-card/80 p-3">
-                  <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Local client id</p>
-                  <p className="mt-2 break-all font-mono text-foreground">{clientId || "initializing..."}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
-              <div className="mb-4">
-                <p className="text-sm font-semibold text-foreground">Client identity</p>
-                <p className="text-xs text-muted-foreground">Label this device and manage the optional access PIN for this session.</p>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
-                Client label
-                <input
-                  value={clientName}
-                  onChange={(event) => setClientName(event.target.value)}
-                  className={surfaceInputClassName}
-                  placeholder="Set a client name"
+            <CardContent className="space-y-5">
+              <div className="relative">
+                <Textarea
+                  id="clipboard-mirror"
+                  value={clipboardText}
+                  placeholder="Paste, type, or restore text here. Use Share + Save when you want to commit a new history entry."
+                  onChange={(event) => handleScratchpadChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void handleShareScratchpad();
+                    }
+                  }}
+                  className="min-h-[280px] pb-16 font-mono text-sm leading-7 sm:min-h-[340px]"
                 />
-              </label>
-                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">
-                Device IP (optional)
-                <input
-                  value={deviceIp}
-                  onChange={(event) => setDeviceIp(event.target.value)}
-                  className={surfaceInputClassName}
-                  placeholder="e.g. 10.50.100.13"
-                />
-              </label>
-                <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground md:col-span-2">
-                Access PIN (optional)
-                <div className="relative">
-                  <input
-                    type={showAccessPin ? "text" : "password"}
-                    autoComplete="current-password"
-                    value={authRequired ? accessPinInput : ""}
-                    disabled={!authRequired}
-                    onChange={(event) => setAccessPinInput(event.target.value)}
-                    className={`${surfaceInputClassName} w-full pr-11`}
-                    placeholder={authRequired ? "Stored for this browser session" : "Disabled until ACCESS_PIN is enabled"}
-                  />
-                  <button
-                    type="button"
-                    aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
-                    disabled={!authRequired}
-                    onClick={() => setShowAccessPin((value) => !value)}
-                    className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {showAccessPin ? (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M3 3l18 18" />
-                        <path d="M10.6 10.6a2 2 0 002.8 2.8" />
-                        <path d="M9.9 4.2A10.5 10.5 0 0112 4c7 0 10 8 10 8a16.4 16.4 0 01-4 5.3" />
-                        <path d="M6.6 6.6A16.8 16.8 0 002 12s3 8 10 8a9.9 9.9 0 004.2-.9" />
-                      </svg>
-                    ) : (
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                        <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    )}
-                  </button>
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
+                  <Button onClick={() => void handleShareScratchpad()} className="pointer-events-auto shadow-xl shadow-primary/20">
+                    Share + Save
+                  </Button>
                 </div>
-              </label>
               </div>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs text-muted-foreground">
-                  Changes here update how this client appears across the QuickRelay server.
-                </p>
-                <Button className="w-full sm:w-auto" disabled={isAuthSubmitting} onClick={() => void handleSaveClientName()}>
-                  Save Client Identity
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-          <CardFooter className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <Button onClick={() => void handleEnableClipboard()} variant="secondary" className="w-full sm:w-auto">
-              Enable Clipboard Access
-            </Button>
-            <Button onClick={() => void pollLocalClipboard()} variant="outline" className="w-full sm:w-auto">
-              Force Read Clipboard
-            </Button>
-          </CardFooter>
-        </Card>
+              <p className="text-xs text-muted-foreground">
+                Tip: press `Ctrl+Enter` or `Cmd+Enter` to share the current scratchpad without leaving the keyboard.
+              </p>
 
-          <Card className="xl:sticky xl:top-8 xl:self-start">
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-2xl">Session Stats</CardTitle>
-                  <CardDescription>Live health for this server and connected clients.</CardDescription>
-                </div>
-                <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
-                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                    <path d="M4 19V9" />
-                    <path d="M10 19V5" />
-                    <path d="M16 19v-7" />
-                    <path d="M22 19V3" />
-                  </svg>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5 text-sm">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Local messages sent</p>
-                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{localMessagesSent}</p>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Cluster messages seen</p>
-                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterMessagesSeen}</p>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients on this server</p>
-                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterConnectedClients}</p>
-                </div>
-                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients connected</p>
-                  <p className="mt-3 font-mono text-2xl font-semibold text-foreground">{connectedClientCount}</p>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
-                <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last remote update</p>
-                <p className="mt-3 font-mono text-base font-semibold text-foreground">{lastRemoteUpdate ?? "None yet"}</p>
-              </div>
-              <Separator />
-              <div className="space-y-3">
-                <p className="text-sm font-semibold text-foreground">Connected clients</p>
-                {connectedClients.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">
-                    No connected clients yet.
+              <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Connection details</p>
+                    <p className="text-xs text-muted-foreground">Current client, route, and server metadata.</p>
                   </div>
-                ) : (
-                  <ul className="space-y-3">
-                    {connectedClients.map((entry) => (
-                      <li
-                        key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`}
-                        className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"
-                      >
-                        <span className="min-w-0">
-                          <span className="inline-flex items-center gap-2 font-mono text-sm text-foreground">
-                            <span className="inline-block h-2.5 w-2.5 rounded-full bg-success shadow-[0_0_0_4px_rgba(14,165,233,0.1)]" />
-                            <span className="truncate">{entry.clientName}</span>
-                          </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            {entry.clientId === clientId ? "This browser session" : "Connected device"}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-right text-xs font-medium text-success">
-                          {entry.ip}
-                          {entry.clientId === clientId ? " (you)" : ""}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                  <div className="inline-flex items-center gap-2 rounded-full bg-muted/70 px-3 py-1.5 text-xs text-muted-foreground">
+                    <span className={`h-2.5 w-2.5 rounded-full ${isConnected ? "bg-success" : "bg-warning"}`} />
+                    {isConnected ? "Online" : "Retrying"}
+                  </div>
+                </div>
+                <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Status</p><p className="mt-2 font-mono text-foreground">{statusText}</p></div>
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Server IP</p><p className="mt-2 font-mono text-foreground">{localNode ? `${localNode.displayAddress}:${localNode.wsPort}` : "initializing..."}</p></div>
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">This device IP</p><p className="mt-2 font-mono text-foreground">{deviceIp || "unavailable"}</p></div>
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Client name</p><p className="mt-2 font-mono text-foreground">{clientName || "initializing..."}</p></div>
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Cluster server id</p><p className="mt-2 break-all font-mono text-foreground">{clusterServerId ?? "initializing..."}</p></div>
+                  <div className="rounded-2xl border border-border/60 bg-card/80 p-3"><p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">Local client id</p><p className="mt-2 break-all font-mono text-foreground">{clientId || "initializing..."}</p></div>
+                </div>
+              </div>
+
+              <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+                <div className="mb-4">
+                  <p className="text-sm font-semibold text-foreground">Client identity</p>
+                  <p className="text-xs text-muted-foreground">Label this device and manage the optional access PIN for this session.</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">Client label<input value={clientName} onChange={(event) => setClientName(event.target.value)} className={surfaceInputClassName} placeholder="Set a client name" /></label>
+                  <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">Device IP (optional)<input value={deviceIp} onChange={(event) => setDeviceIp(event.target.value)} className={surfaceInputClassName} placeholder="e.g. 10.50.100.13" /></label>
+                  <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground md:col-span-2">Access PIN (optional)<input type={showAccessPin ? "text" : "password"} autoComplete="current-password" value={authRequired ? accessPinInput : ""} disabled={!authRequired} onChange={(event) => setAccessPinInput(event.target.value)} className={surfaceInputClassName} placeholder={authRequired ? "Stored for this browser session" : "Disabled until ACCESS_PIN is enabled"} /></label>
+                </div>
+                <div className="mt-4">
+                  <p className="text-xs text-muted-foreground">Changes here update how this client appears across the QuickRelay server.</p>
+                </div>
               </div>
             </CardContent>
+            <CardFooter className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <Button onClick={() => void handleSaveClientName()} className="w-full sm:w-auto" disabled={isAuthSubmitting}>Save Client Identity</Button>
+              <Button onClick={() => void handleEnableClipboard()} variant="secondary" className="w-full sm:w-auto">Enable Clipboard Access</Button>
+              <Button onClick={() => void pollLocalClipboard()} variant="outline" className="w-full sm:w-auto">Force Read Clipboard</Button>
+            </CardFooter>
+          </Card>
+
+          <Card
+            className="flex flex-col overflow-hidden xl:self-start"
+            style={historyColumnHeight ? { height: `${historyColumnHeight}px` } : undefined}
+          >
+              <CardHeader className="gap-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-2xl">History</CardTitle>
+                    <CardDescription>Shared entries are stored on the server and survive restarts for this QuickRelay node.</CardDescription>
+                  </div>
+                  <Button size="sm" className="shadow-xl shadow-primary/20" disabled={historyEntries.length === 0 || isHistoryClearing} onClick={handleClearHistory}>
+                    {isHistoryClearing ? "Clearing..." : "Clear all"}
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="flex min-h-0 flex-1 flex-col space-y-4 overflow-hidden">
+                {historyEntries.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">
+                    No history yet. Paste something into the scratchpad or copy text on another connected device to start building the list.
+                  </div>
+                ) : (
+                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                    {historyEntries.map((entry) => (
+                      <button key={entry.id} type="button" onClick={() => void handleReuseHistoryItem(entry)} className="group w-full rounded-[24px] border border-border/70 bg-background/70 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-background/90">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{formatHistoryTimestamp(entry.createdAt)}</p>
+                            <div className="mt-2 line-clamp-5 text-sm leading-7 text-foreground">{renderHistoryMarkdown(entry.text)}</div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-2">
+                            <Button variant="ghost" size="sm" className="text-xs" onClick={(event) => { event.stopPropagation(); void handleCopyHistoryItem(entry); }}>Copy</Button>
+                            <span className="text-[11px] text-muted-foreground group-hover:text-primary">Use in scratchpad</span>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+          </Card>
+
+          <Card className="xl:self-start">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-2xl">Session Stats</CardTitle>
+                    <CardDescription>Live health for this server and connected clients.</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-5 text-sm">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Local messages sent</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{localMessagesSent}</p></div>
+                  <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Cluster messages seen</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterMessagesSeen}</p></div>
+                  <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients on this server</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterConnectedClients}</p></div>
+                  <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">History entries</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{historyEntries.length}</p></div>
+                </div>
+                <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last remote update</p><p className="mt-3 font-mono text-base font-semibold text-foreground">{lastRemoteUpdate ?? "None yet"}</p></div>
+                <Separator />
+                <div className="space-y-3">
+                  <p className="text-sm font-semibold text-foreground">Connected clients</p>
+                  {connectedClients.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">No connected clients yet.</div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {connectedClients.map((entry) => (
+                        <li key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`} className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
+                          <span className="min-w-0">
+                            <span className="inline-flex items-center gap-2 font-mono text-sm text-foreground">
+                              <span className="inline-block h-2.5 w-2.5 rounded-full bg-success shadow-[0_0_0_4px_rgba(14,165,233,0.1)]" />
+                              <span className="truncate">{entry.clientName}</span>
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{entry.clientId === clientId ? "This browser session" : "Connected device"}</span>
+                          </span>
+                          <span className="shrink-0 text-right text-xs font-medium text-success">{entry.ip}{entry.clientId === clientId ? " (you)" : ""}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </CardContent>
           </Card>
         </div>
       </section>
     </main>
   );
 }
-
