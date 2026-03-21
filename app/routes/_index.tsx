@@ -575,11 +575,17 @@ export default function Index() {
     if (liveMirrorTimerRef.current !== null) {
       window.clearTimeout(liveMirrorTimerRef.current);
     }
+    if (!value) {
+      void writeClipboardText("");
+      sendClipboard("", { persistToHistory: false });
+      setStatusText("Scratchpad cleared locally and across the live clipboard state.");
+      return;
+    }
     liveMirrorTimerRef.current = window.setTimeout(() => {
       sendClipboard(value, { persistToHistory: false });
     }, 140);
     setStatusText("Scratchpad is mirroring live. Use Share + Save when you want to add a history entry.");
-  }, [sendClipboard]);
+  }, [sendClipboard, writeClipboardText]);
 
   const handleShareScratchpad = useCallback(async () => {
     const value = normalizeClipboardText(clipboardText);
@@ -887,7 +893,7 @@ export default function Index() {
 
     try {
       const text = await navigator.clipboard.readText();
-      if (text === lastClipboardRef.current || (text === "" && lastClipboardRef.current !== "")) {
+      if (text === lastClipboardRef.current) {
         return;
       }
       lastClipboardRef.current = text;
@@ -1349,7 +1355,7 @@ export default function Index() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="pointer-events-auto h-8 w-8 rounded-xl p-0"
+                    className="pointer-events-auto mr-3 h-8 w-8 rounded-xl p-0"
                     onClick={() => void handleCopyScratchpad()}
                     aria-label="Copy scratchpad"
                     title="Copy scratchpad"
@@ -1495,23 +1501,34 @@ export default function Index() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="min-w-[84px] text-xs"
+                                className="min-w-[96px] gap-1.5 text-xs"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   void handleCopyHistoryItem(entry);
                                 }}
                               >
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                                  <rect x="9" y="9" width="10" height="10" rx="2" />
+                                  <path d="M6 15H5a2 2 0 01-2-2V5a2 2 0 012-2h8a2 2 0 012 2v1" />
+                                </svg>
                                 Copy
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="quickrelay-danger-button min-w-[84px]"
+                                className="quickrelay-danger-button min-w-[96px] gap-1.5"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   handleDeleteHistoryItem(entry);
                                 }}
                                 >
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                                  <path d="M4 7h16" />
+                                  <path d="M10 11v6" />
+                                  <path d="M14 11v6" />
+                                  <path d="M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12" />
+                                  <path d="M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                                </svg>
                                 Delete
                               </Button>
                             </div>

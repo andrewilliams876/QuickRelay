@@ -88,6 +88,65 @@
   ::selection {
     background: hsl(var(--primary) / 0.22);
   }
+
+  .quickrelay-page textarea,
+  .quickrelay-history-list,
+  .quickrelay-page ul.overflow-y-auto {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(220 16% 70% / 0.75) transparent;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar,
+  .quickrelay-history-list::-webkit-scrollbar,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-track,
+  .quickrelay-history-list::-webkit-scrollbar-track,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-thumb,
+  .quickrelay-history-list::-webkit-scrollbar-thumb,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb {
+    background: hsl(220 16% 70% / 0.72);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-thumb:hover,
+  .quickrelay-history-list::-webkit-scrollbar-thumb:hover,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(220 16% 60% / 0.9);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .dark .quickrelay-page textarea,
+  .dark .quickrelay-history-list,
+  .dark .quickrelay-page ul.overflow-y-auto {
+    scrollbar-color: hsl(219 16% 42% / 0.85) transparent;
+  }
+
+  .dark .quickrelay-page textarea::-webkit-scrollbar-thumb,
+  .dark .quickrelay-history-list::-webkit-scrollbar-thumb,
+  .dark .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb {
+    background: hsl(219 16% 42% / 0.82);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .dark .quickrelay-page textarea::-webkit-scrollbar-thumb:hover,
+  .dark .quickrelay-history-list::-webkit-scrollbar-thumb:hover,
+  .dark .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(219 16% 52% / 0.96);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
 }
 
 @layer components {
