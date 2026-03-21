@@ -345,6 +345,10 @@ function formatHistoryTimestamp(timestamp: number) {
   return new Date(timestamp).toLocaleString([], { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
 }
 
+function normalizeClipboardText(raw: string) {
+  return raw.replace(/\r\n/g, "\n");
+}
+
 function renderMarkdownSegment(segment: string, keyPrefix: string) {
   return segment.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((token, index) => {
     if (token.startsWith("**") && token.endsWith("**") && token.length > 4) {
@@ -568,9 +572,15 @@ export default function Index() {
   }, [sendClipboard]);
 
   const handleShareScratchpad = useCallback(async () => {
-    const value = clipboardText.replace(/\r\n/g, "\n");
+    const value = normalizeClipboardText(clipboardText);
     if (!value.trim()) {
       setStatusText("Add some text to the scratchpad before sharing it.");
+      return;
+    }
+
+    const latestSavedEntry = historyEntries[0];
+    if (latestSavedEntry && normalizeClipboardText(latestSavedEntry.text) === value) {
+      setStatusText("Scratchpad already matches the latest saved history entry.");
       return;
     }
 
@@ -593,7 +603,7 @@ export default function Index() {
           : "Scratchpad shared and saved, but clipboard write is blocked locally."
         : "Scratchpad updated locally. Connect to sync and save it to history."
     );
-  }, [clipboardText, sendClipboard, writeClipboardText]);
+  }, [clipboardText, historyEntries, sendClipboard, writeClipboardText]);
 
   const handleReuseHistoryItem = useCallback(async (entry: ClipboardHistoryEntry) => {
     setClipboardText(entry.text);
@@ -1060,18 +1070,10 @@ export default function Index() {
     }
     const resolved = clientName.replace(/\s+/g, " ").trim().slice(0, 48) || makeDefaultClientName();
     const cleanedIp = deviceIp.trim();
-    const cleanedPinInput = accessPinInput.trim();
 
     if (cleanedIp && !isValidClientIp(cleanedIp)) {
       setStatusText("Device IP must be a valid IPv4 address.");
       return;
-    }
-
-    if (authRequired && cleanedPinInput && (authGateLocked || !accessTokenRef.current.trim())) {
-      const authenticated = await exchangeAccessPinForToken(cleanedPinInput);
-      if (!authenticated) {
-        return;
-      }
     }
 
     if (authRequired && !accessTokenRef.current.trim()) {
@@ -1087,8 +1089,8 @@ export default function Index() {
     window.localStorage.setItem("quickRelayClientName", resolved);
     window.localStorage.setItem("quickRelayDeviceIp", cleanedIp);
     sendClientHello();
-    setStatusText(authRequired ? "Client identity and auth token updated." : "Client identity updated.");
-  }, [accessPinInput, authGateLocked, authRequired, clientName, deviceIp, exchangeAccessPinForToken, sendClientHello]);
+    setStatusText("Client identity updated.");
+  }, [authRequired, clientName, deviceIp, sendClientHello]);
 
   const handlePinDialogSubmit = useCallback(async () => {
     await exchangeAccessPinForToken(accessPinInput);
@@ -1118,6 +1120,7 @@ export default function Index() {
   const displayStatus = sanitizeWsUrlForDisplay(activeWsUrl || wsUrl || `ws://<host>:${wsPort}`);
   const surfaceInputClassName =
     "h-12 rounded-2xl border border-border/70 bg-background/80 px-4 text-sm text-foreground shadow-sm transition placeholder:text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground/80 disabled:opacity-100";
+  const pinFieldClassName = `${surfaceInputClassName} w-full pr-11`;
 
   useEffect(() => {
     setThemeMode(getInitialThemeMode());
@@ -1139,7 +1142,7 @@ export default function Index() {
   }, []);
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+    <main className="quickrelay-page relative min-h-screen overflow-hidden px-4 py-3 sm:px-6 sm:py-5 lg:px-8">
       {isAuthLocked ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-md">
           <div className="w-full max-w-md rounded-[32px] border border-border/70 bg-card/95 p-6 shadow-[0_28px_70px_rgba(15,23,42,0.25)] sm:p-7">
@@ -1169,15 +1172,37 @@ export default function Index() {
             >
               <label className="flex flex-col gap-1 text-xs text-muted-foreground">
                 Access PIN
-                <input
-                  type={showAccessPin ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={accessPinInput}
-                  onChange={(event) => setAccessPinInput(event.target.value)}
-                  autoFocus
-                  className={surfaceInputClassName}
-                  placeholder="Enter ACCESS_PIN"
-                />
+                <div className="relative">
+                  <input
+                    type={showAccessPin ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={accessPinInput}
+                    onChange={(event) => setAccessPinInput(event.target.value)}
+                    autoFocus
+                    className={pinFieldClassName}
+                    placeholder="Enter ACCESS_PIN"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAccessPin((value) => !value)}
+                    className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground"
+                    aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
+                  >
+                    {showAccessPin ? (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.6 10.6a2 2 0 002.8 2.8" />
+                        <path d="M9.9 4.2A10.5 10.5 0 0112 4c7 0 10 8 10 8a16.4 16.4 0 01-4 5.3" />
+                        <path d="M6.6 6.6A16.8 16.8 0 002 12s3 8 10 8a9.9 9.9 0 004.2-.9" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8S2 12 2 12z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </label>
               {authError ? <p className="text-xs text-warning">{authError}</p> : null}
               <div className="flex justify-end gap-2 pt-1">
@@ -1190,34 +1215,34 @@ export default function Index() {
         </div>
       ) : null}
 
-      <section className={`mx-auto flex w-full max-w-7xl flex-col gap-6 ${!pageReady ? "pointer-events-none select-none opacity-60" : ""}`}>
-        <div className="flex flex-col gap-4 rounded-[32px] border border-border/60 bg-card/75 p-4 shadow-[0_20px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5">
+      <section className={`quickrelay-shell mx-auto flex w-full max-w-[1780px] flex-col gap-4 ${!pageReady ? "pointer-events-none select-none opacity-60" : ""}`}>
+        <div className="quickrelay-hero flex flex-col gap-3 rounded-[26px] border border-border/60 bg-card/75 p-4 shadow-[0_18px_42px_rgba(15,23,42,0.08)] backdrop-blur-xl sm:p-5 lg:p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-3">
               <div className="inline-flex items-center gap-3">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
-                  <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/12 text-primary shadow-sm">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
                     <path d="M7 7h6a4 4 0 014 4v6" />
                     <path d="M17 17h-6a4 4 0 01-4-4V7" />
                     <path d="M8 16L16 8" />
                   </svg>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-primary/80">Realtime scratchpad relay</p>
-                  <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">QuickRelay</h1>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-primary/80">Realtime scratchpad relay</p>
+                  <h1 className="quickrelay-hero-title text-[1.95rem] font-semibold tracking-tight text-foreground sm:text-[2.35rem]">QuickRelay</h1>
                 </div>
               </div>
-              <p className="max-w-3xl text-sm leading-7 text-muted-foreground sm:text-base">
+              <p className="quickrelay-hero-copy max-w-[58rem] text-sm leading-7 text-muted-foreground">
                 Keep the live scratchpad in front of you while QuickRelay automatically builds a reusable history across the LAN.
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-              <Button type="button" variant="outline" className="min-w-[124px]" onClick={toggleThemeMode}>
+            <div className="flex flex-wrap items-center gap-2.5 lg:justify-end">
+              <Button type="button" variant="outline" size="sm" className="min-w-[112px]" onClick={toggleThemeMode}>
                 {themeMode === "dark" ? "Light mode" : "Dark mode"}
               </Button>
               {authRequired && !isAuthLocked ? (
-                <Button type="button" variant="secondary" className="min-w-[116px]" onClick={handleLockSession}>
+                <Button type="button" variant="secondary" size="sm" className="min-w-[108px]" onClick={handleLockSession}>
                   Lock session
                 </Button>
               ) : null}
@@ -1225,8 +1250,8 @@ export default function Index() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Badge variant={connectionBadgeVariant}>{isConnected ? "Realtime Connected" : "Server Offline"}</Badge>
-            <Badge variant={permissionBadgeVariant}>
+            <Badge className="px-2.5 py-0.5 text-[10px]" variant={connectionBadgeVariant}>{isConnected ? "Realtime Connected" : "Server Offline"}</Badge>
+            <Badge className="px-2.5 py-0.5 text-[10px]" variant={permissionBadgeVariant}>
               {permissionLevel === "granted"
                 ? "Clipboard Access Ready"
                 : permissionLevel === "checking"
@@ -1235,30 +1260,30 @@ export default function Index() {
                     ? "Permission Prompt Needed"
                     : "Clipboard Access Blocked"}
             </Badge>
-            <Badge variant={accessBadgeVariant}>
+            <Badge className="px-2.5 py-0.5 text-[10px]" variant={accessBadgeVariant}>
               {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
             </Badge>
-            <Badge variant="outline">{historyEntries.length}/{maxHistoryItems} history slots used</Badge>
+            <Badge className="px-2.5 py-0.5 text-[10px]" variant="outline">{historyEntries.length}/{maxHistoryItems} history slots used</Badge>
           </div>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_280px_300px] xl:items-start">
-          <Card ref={scratchpadCardRef} className="overflow-hidden">
-            <CardHeader className="gap-5">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="quickrelay-workspace grid gap-4 xl:grid-cols-[minmax(0,1.85fr)_330px_330px] xl:items-start">
+          <Card ref={scratchpadCardRef} className="quickrelay-panel quickrelay-scratchpad-panel overflow-hidden">
+            <CardHeader className="quickrelay-panel-header gap-3 p-5 sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <CardTitle>Scratchpad</CardTitle>
-                  <CardDescription>
+                  <CardTitle className="quickrelay-section-title text-[1.45rem] sm:text-[1.65rem]">Scratchpad</CardTitle>
+                  <CardDescription className="quickrelay-section-copy max-w-[30rem] text-sm leading-6">
                     The live text surface stays editable, while history captures the meaningful states you share.
                   </CardDescription>
                 </div>
-                <div className="rounded-2xl border border-border/70 bg-background/70 px-4 py-3 text-right shadow-sm">
+                <div className="quickrelay-live-route rounded-2xl border border-border/70 bg-background/70 px-3.5 py-2.5 text-right shadow-sm">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Live route</p>
                   <p className="mt-1 max-w-[220px] truncate font-mono text-xs text-foreground sm:max-w-[280px]">{displayStatus}</p>
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-5">
+            <CardContent className="quickrelay-panel-content space-y-3.5 p-5 pt-0 sm:p-5 sm:pt-0">
               <div className="relative">
                 <Textarea
                   id="clipboard-mirror"
@@ -1271,10 +1296,10 @@ export default function Index() {
                       void handleShareScratchpad();
                     }
                   }}
-                  className="min-h-[280px] pb-16 font-mono text-sm leading-7 sm:min-h-[340px]"
+                  className="quickrelay-scratchpad-input min-h-[230px] pb-16 font-mono text-sm leading-7 sm:min-h-[280px]"
                 />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
-                  <Button onClick={() => void handleShareScratchpad()} className="pointer-events-auto shadow-xl shadow-primary/20">
+                  <Button size="sm" onClick={() => void handleShareScratchpad()} className="pointer-events-auto shadow-xl shadow-primary/20">
                     Share + Save
                   </Button>
                 </div>
@@ -1283,7 +1308,7 @@ export default function Index() {
                 Tip: press `Ctrl+Enter` or `Cmd+Enter` to share the current scratchpad without leaving the keyboard.
               </p>
 
-              <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+              <div className="quickrelay-subpanel rounded-[24px] border border-border/70 bg-background/75 p-3.5 shadow-inner shadow-slate-900/5">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-foreground">Connection details</p>
@@ -1304,7 +1329,7 @@ export default function Index() {
                 </div>
               </div>
 
-              <div className="rounded-[28px] border border-border/70 bg-background/75 p-4 shadow-inner shadow-slate-900/5 sm:p-5">
+              <div className="quickrelay-subpanel rounded-[24px] border border-border/70 bg-background/75 p-3.5 shadow-inner shadow-slate-900/5">
                 <div className="mb-4">
                   <p className="text-sm font-semibold text-foreground">Client identity</p>
                   <p className="text-xs text-muted-foreground">Label this device and manage the optional access PIN for this session.</p>
@@ -1312,44 +1337,76 @@ export default function Index() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">Client label<input value={clientName} onChange={(event) => setClientName(event.target.value)} className={surfaceInputClassName} placeholder="Set a client name" /></label>
                   <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground">Device IP (optional)<input value={deviceIp} onChange={(event) => setDeviceIp(event.target.value)} className={surfaceInputClassName} placeholder="e.g. 10.50.100.13" /></label>
-                  <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground md:col-span-2">Access PIN (optional)<input type={showAccessPin ? "text" : "password"} autoComplete="current-password" value={authRequired ? accessPinInput : ""} disabled={!authRequired} onChange={(event) => setAccessPinInput(event.target.value)} className={surfaceInputClassName} placeholder={authRequired ? "Stored for this browser session" : "Disabled until ACCESS_PIN is enabled"} /></label>
+                  <label className="flex flex-col gap-2 text-xs font-medium text-muted-foreground md:col-span-2">
+                    Access PIN (optional)
+                    <div className="relative">
+                      <input
+                        type={showAccessPin ? "text" : "password"}
+                        autoComplete="current-password"
+                        value={authRequired ? accessPinInput : ""}
+                        readOnly
+                        disabled={!authRequired}
+                        className={pinFieldClassName}
+                        placeholder={authRequired ? "Stored for this browser session" : ""}
+                      />
+                      {authRequired ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAccessPin((value) => !value)}
+                          className="absolute right-3 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground transition hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label={showAccessPin ? "Hide PIN" : "Show PIN"}
+                        >
+                          {showAccessPin ? (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M3 3l18 18" />
+                              <path d="M10.6 10.6a2 2 0 002.8 2.8" />
+                              <path d="M9.9 4.2A10.5 10.5 0 0112 4c7 0 10 8 10 8a16.4 16.4 0 01-4 5.3" />
+                              <path d="M6.6 6.6A16.8 16.8 0 002 12s3 8 10 8a9.9 9.9 0 004.2-.9" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                              <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8S2 12 2 12z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
+                  </label>
                 </div>
                 <div className="mt-4">
                   <p className="text-xs text-muted-foreground">Changes here update how this client appears across the QuickRelay server.</p>
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              <Button onClick={() => void handleSaveClientName()} className="w-full sm:w-auto" disabled={isAuthSubmitting}>Save Client Identity</Button>
-              <Button onClick={() => void handleEnableClipboard()} variant="secondary" className="w-full sm:w-auto">Enable Clipboard Access</Button>
-              <Button onClick={() => void pollLocalClipboard()} variant="outline" className="w-full sm:w-auto">Force Read Clipboard</Button>
+            <CardFooter className="quickrelay-panel-footer flex flex-col gap-2.5 p-5 pt-0 sm:flex-row sm:flex-wrap sm:p-5 sm:pt-0">
+              <Button size="sm" onClick={() => void handleEnableClipboard()} variant="secondary" className="w-full sm:w-auto">Enable Clipboard Access</Button>
+              <Button size="sm" onClick={() => void pollLocalClipboard()} variant="outline" className="w-full sm:w-auto">Force Read Clipboard</Button>
+              <Button size="sm" onClick={() => void handleSaveClientName()} className="w-full sm:w-auto" disabled={isAuthSubmitting}>Save Client Identity</Button>
             </CardFooter>
           </Card>
 
           <Card
-            className="flex flex-col overflow-hidden xl:self-start"
+            className="quickrelay-panel quickrelay-history-panel flex flex-col overflow-hidden xl:self-start"
             style={historyColumnHeight ? { height: `${historyColumnHeight}px` } : undefined}
           >
-              <CardHeader className="gap-4">
-                <div className="flex items-start justify-between gap-3">
+              <CardHeader className="quickrelay-panel-header gap-3 p-5 sm:p-5">
+                <div className="flex items-start gap-3">
                   <div>
-                    <CardTitle className="text-2xl">History</CardTitle>
-                    <CardDescription>Shared entries are stored on the server and survive restarts for this QuickRelay node.</CardDescription>
+                    <CardTitle className="quickrelay-section-title text-[1.35rem] sm:text-[1.55rem]">History</CardTitle>
+                    <CardDescription className="quickrelay-section-copy text-sm leading-6">Shared entries are stored on the server and survive restarts for this QuickRelay node.</CardDescription>
                   </div>
-                  <Button size="sm" className="shadow-xl shadow-primary/20" disabled={historyEntries.length === 0 || isHistoryClearing} onClick={handleClearHistory}>
-                    {isHistoryClearing ? "Clearing..." : "Clear all"}
-                  </Button>
                 </div>
               </CardHeader>
-              <CardContent className="flex min-h-0 flex-1 flex-col space-y-4 overflow-hidden">
+              <CardContent className="quickrelay-panel-content flex min-h-0 flex-1 flex-col space-y-3 overflow-hidden p-5 pt-0 sm:p-5 sm:pt-0">
                 {historyEntries.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">
                     No history yet. Paste something into the scratchpad or copy text on another connected device to start building the list.
                   </div>
                 ) : (
-                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                  <div className="quickrelay-history-list min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-1">
                     {historyEntries.map((entry) => (
-                      <button key={entry.id} type="button" onClick={() => void handleReuseHistoryItem(entry)} className="group w-full rounded-[24px] border border-border/70 bg-background/70 p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-background/90">
+                      <button key={entry.id} type="button" onClick={() => void handleReuseHistoryItem(entry)} className="quickrelay-history-item group w-full rounded-[20px] border border-border/70 bg-background/70 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-background/90">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{formatHistoryTimestamp(entry.createdAt)}</p>
@@ -1365,19 +1422,29 @@ export default function Index() {
                   </div>
                 )}
               </CardContent>
+              <CardFooter className="quickrelay-panel-footer quickrelay-history-footer justify-center p-5 pt-0 sm:p-5 sm:pt-0">
+                <Button
+                  size="sm"
+                  className="shadow-xl shadow-primary/20"
+                  disabled={historyEntries.length === 0 || isHistoryClearing}
+                  onClick={handleClearHistory}
+                >
+                  {isHistoryClearing ? "Clearing..." : "Clear all"}
+                </Button>
+              </CardFooter>
           </Card>
 
-          <Card className="xl:self-start">
-              <CardHeader>
+          <Card className="quickrelay-panel quickrelay-stats-panel xl:self-start">
+              <CardHeader className="quickrelay-panel-header p-5 sm:p-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <CardTitle className="text-2xl">Session Stats</CardTitle>
-                    <CardDescription>Live health for this server and connected clients.</CardDescription>
+                    <CardTitle className="quickrelay-section-title text-[1.35rem] sm:text-[1.55rem]">Session Stats</CardTitle>
+                    <CardDescription className="quickrelay-section-copy text-sm leading-6">Live health for this server and connected clients.</CardDescription>
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-5 text-sm">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <CardContent className="quickrelay-panel-content space-y-3.5 p-5 pt-0 text-sm sm:p-5 sm:pt-0">
+                <div className="quickrelay-stat-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Local messages sent</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{localMessagesSent}</p></div>
                   <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Cluster messages seen</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterMessagesSeen}</p></div>
                   <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Clients on this server</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterConnectedClients}</p></div>
