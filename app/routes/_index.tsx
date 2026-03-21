@@ -881,7 +881,7 @@ export default function Index() {
       lastClipboardRef.current = text;
       setClipboardText(text);
       if (Date.now() >= skipBroadcastUntilRef.current) {
-        sendClipboard(text);
+        sendClipboard(text, { persistToHistory: false });
         setStatusText("Local clipboard detected and shared.");
       }
     } catch {
@@ -1098,7 +1098,7 @@ export default function Index() {
       setClipboardText(latest);
       setPermissionLevel("granted");
       setStatusText("Clipboard permissions enabled.");
-      sendClipboard(latest);
+      sendClipboard(latest, { persistToHistory: false });
     } catch {
       setPermissionLevel("blocked");
       setStatusText("Clipboard permissions were denied.");
@@ -1159,6 +1159,13 @@ export default function Index() {
   const isAuthLocked = authRequired && authGateLocked;
   const pageReady = !isAuthLocked;
   const displayStatus = sanitizeWsUrlForDisplay(activeWsUrl || wsUrl || `ws://<host>:${wsPort}`);
+  const historyUsageRatio = maxHistoryItems > 0 ? historyEntries.length / maxHistoryItems : 0;
+  const historyUsageBadgeClassName =
+    historyEntries.length >= maxHistoryItems
+      ? "border-red-500/40 bg-red-500/12 text-red-300"
+      : historyUsageRatio >= 0.8
+        ? "border-amber-500/40 bg-amber-500/14 text-amber-300"
+        : "border-border/80 bg-background/70 text-foreground/80";
   const surfaceInputClassName =
     "h-12 rounded-2xl border border-border/70 bg-background/80 px-4 text-sm text-foreground shadow-sm transition placeholder:text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground/80 disabled:opacity-100";
   const pinFieldClassName = `${surfaceInputClassName} w-full pr-11`;
@@ -1278,7 +1285,7 @@ export default function Index() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5 lg:justify-end">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 lg:justify-end">
               <Button type="button" variant="outline" size="sm" className="min-w-[112px]" onClick={toggleThemeMode}>
                 {themeMode === "dark" ? "Light mode" : "Dark mode"}
               </Button>
@@ -1290,7 +1297,7 @@ export default function Index() {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-center gap-2 lg:justify-start">
             <Badge className="px-2.5 py-0.5 text-[10px]" variant={connectionBadgeVariant}>{isConnected ? "Realtime Connected" : "Server Offline"}</Badge>
             <Badge className="px-2.5 py-0.5 text-[10px]" variant={permissionBadgeVariant}>
               {permissionLevel === "granted"
@@ -1304,7 +1311,7 @@ export default function Index() {
             <Badge className="px-2.5 py-0.5 text-[10px]" variant={accessBadgeVariant}>
               {!authRequired ? "No Access PIN" : authGateLocked ? "Access PIN Required" : "Access PIN Accepted"}
             </Badge>
-            <Badge className="px-2.5 py-0.5 text-[10px]" variant="outline">{historyEntries.length}/{maxHistoryItems} history slots used</Badge>
+            <Badge className={`px-2.5 py-0.5 text-[10px] ${historyUsageBadgeClassName}`} variant="outline">{historyEntries.length}/{maxHistoryItems} history slots used</Badge>
           </div>
         </div>
 
@@ -1502,7 +1509,10 @@ export default function Index() {
               </CardFooter>
           </Card>
 
-          <Card className="quickrelay-panel quickrelay-stats-panel xl:self-start">
+          <Card
+            className="quickrelay-panel quickrelay-stats-panel flex flex-col overflow-hidden xl:self-start"
+            style={historyColumnHeight ? { height: `${historyColumnHeight}px` } : undefined}
+          >
               <CardHeader className="quickrelay-panel-header p-5 sm:p-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -1511,7 +1521,7 @@ export default function Index() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="quickrelay-panel-content space-y-3.5 p-5 pt-0 text-sm sm:p-5 sm:pt-0">
+              <CardContent className="quickrelay-panel-content flex flex-1 flex-col space-y-3.5 overflow-hidden p-5 pt-0 text-sm sm:p-5 sm:pt-0">
                 <div className="quickrelay-stat-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Local messages sent</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{localMessagesSent}</p></div>
                   <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Cluster messages seen</p><p className="mt-3 font-mono text-2xl font-semibold text-foreground">{clusterMessagesSeen}</p></div>
@@ -1520,12 +1530,12 @@ export default function Index() {
                 </div>
                 <div className="rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm"><p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Last remote update</p><p className="mt-3 font-mono text-base font-semibold text-foreground">{lastRemoteUpdate ?? "None yet"}</p></div>
                 <Separator />
-                <div className="space-y-3">
+                <div className="flex min-h-0 flex-1 flex-col space-y-3 overflow-hidden">
                   <p className="text-sm font-semibold text-foreground">Connected clients</p>
                   {connectedClients.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-border/70 bg-background/60 p-4 text-sm text-muted-foreground">No connected clients yet.</div>
                   ) : (
-                    <ul className="space-y-3">
+                    <ul className="min-h-0 space-y-3 overflow-y-auto pr-1">
                       {connectedClients.map((entry) => (
                         <li key={`${entry.clientId}-${entry.ip}-${entry.connectedAt}`} className="flex items-center justify-between gap-3 rounded-2xl border border-border/70 bg-background/70 p-4 shadow-sm">
                           <span className="min-w-0">
