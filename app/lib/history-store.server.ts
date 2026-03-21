@@ -8,6 +8,7 @@ export type ClipboardHistoryEntry = {
   text: string;
   createdAt: number;
   sourceClientId: string;
+  sourceClientName: string;
 };
 
 const defaultDbPath = path.join(process.cwd(), "data", "quickrelay-history.sqlite");
@@ -25,27 +26,33 @@ db.exec(`
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    source_client_id TEXT NOT NULL
+    source_client_id TEXT NOT NULL,
+    source_client_name TEXT NOT NULL DEFAULT ''
   )
 `);
 
+const historyColumns = db.prepare(`PRAGMA table_info(clipboard_history)`).all() as Array<{ name: string }>;
+if (!historyColumns.some((column) => column.name === "source_client_name")) {
+  db.exec(`ALTER TABLE clipboard_history ADD COLUMN source_client_name TEXT NOT NULL DEFAULT ''`);
+}
+
 const selectHistoryStmt = db.prepare(`
-  SELECT id, text, created_at AS createdAt, source_client_id AS sourceClientId
+  SELECT id, text, created_at AS createdAt, source_client_id AS sourceClientId, source_client_name AS sourceClientName
   FROM clipboard_history
   ORDER BY created_at DESC, rowid DESC
   LIMIT ?
 `);
 
 const selectLatestHistoryStmt = db.prepare(`
-  SELECT id, text, created_at AS createdAt, source_client_id AS sourceClientId
+  SELECT id, text, created_at AS createdAt, source_client_id AS sourceClientId, source_client_name AS sourceClientName
   FROM clipboard_history
   ORDER BY created_at DESC, rowid DESC
   LIMIT 1
 `);
 
 const insertHistoryStmt = db.prepare(`
-  INSERT INTO clipboard_history (id, text, created_at, source_client_id)
-  VALUES (@id, @text, @createdAt, @sourceClientId)
+  INSERT INTO clipboard_history (id, text, created_at, source_client_id, source_client_name)
+  VALUES (@id, @text, @createdAt, @sourceClientId, @sourceClientName)
 `);
 
 const selectOverflowIdsStmt = db.prepare(`
@@ -62,6 +69,11 @@ const deleteHistoryByIdStmt = db.prepare(`
 
 const clearHistoryStmt = db.prepare(`
   DELETE FROM clipboard_history
+`);
+
+const deleteSingleHistoryEntryStmt = db.prepare(`
+  DELETE FROM clipboard_history
+  WHERE id = ?
 `);
 
 function normalizeHistoryText(raw: string) {
@@ -84,6 +96,15 @@ export function clearHistoryEntries() {
   clearHistoryStmt.run();
 }
 
+export function deleteHistoryEntry(id: string) {
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    return false;
+  }
+  const result = deleteSingleHistoryEntryStmt.run(normalizedId);
+  return result.changes > 0;
+}
+
 export function appendHistoryEntry(entry: ClipboardHistoryEntry) {
   const normalizedText = normalizeHistoryText(entry.text);
   if (!normalizedText.trim()) {
@@ -99,7 +120,8 @@ export function appendHistoryEntry(entry: ClipboardHistoryEntry) {
     id: entry.id,
     text: normalizedText,
     createdAt: entry.createdAt,
-    sourceClientId: entry.sourceClientId
+    sourceClientId: entry.sourceClientId,
+    sourceClientName: entry.sourceClientName.trim()
   });
 
   const overflowRows = selectOverflowIdsStmt.all(maxHistoryItems) as Array<{ id: string }>;

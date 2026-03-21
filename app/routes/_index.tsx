@@ -13,6 +13,7 @@ type ClipboardUpdateMessage = {
   type: "clipboard_update";
   text: string;
   clientId: string;
+  sourceClientName?: string;
   timestamp: number;
   persistToHistory?: boolean;
   messageId?: string;
@@ -24,6 +25,7 @@ type ClipboardHistoryEntry = {
   text: string;
   createdAt: number;
   sourceClientId: string;
+  sourceClientName: string;
 };
 
 type HistorySnapshotMessage = {
@@ -40,6 +42,12 @@ type HistoryAppendMessage = {
 type HistoryClearMessage = {
   type: "history_clear";
   clearedAt: number;
+};
+
+type HistoryDeleteMessage = {
+  type: "history_delete";
+  id: string;
+  deletedAt?: number;
 };
 
 type HistoryTruncateMessage = {
@@ -87,6 +95,7 @@ type WsInboundMessage =
   | HistorySnapshotMessage
   | HistoryAppendMessage
   | HistoryClearMessage
+  | HistoryDeleteMessage
   | HistoryTruncateMessage;
 
 type AccessTokenApiResponse = {
@@ -455,6 +464,7 @@ export default function Index() {
       type: "clipboard_update",
       text,
       clientId: clientIdRef.current,
+      sourceClientName: clientNameRef.current,
       timestamp: Date.now(),
       persistToHistory: options?.persistToHistory
     };
@@ -633,6 +643,16 @@ export default function Index() {
     }
     setIsHistoryClearing(true);
     ws.send(JSON.stringify({ type: "history_clear" }));
+  }, []);
+
+  const handleDeleteHistoryItem = useCallback((entry: ClipboardHistoryEntry) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setStatusText("Connect to the sync server before deleting a history entry.");
+      return;
+    }
+    ws.send(JSON.stringify({ type: "history_delete", id: entry.id }));
+    setStatusText("Removing history entry...");
   }, []);
 
   useEffect(() => {
@@ -929,31 +949,46 @@ export default function Index() {
 
           if (payload.type === "history_snapshot" && Array.isArray(payload.entries)) {
             setHistoryEntries(
-              payload.entries.filter(
-                (entry): entry is ClipboardHistoryEntry =>
-                  typeof entry?.id === "string" &&
-                  typeof entry?.text === "string" &&
-                  typeof entry?.createdAt === "number" &&
-                  typeof entry?.sourceClientId === "string"
-              )
+              payload.entries
+                .filter(
+                  (entry): entry is Omit<ClipboardHistoryEntry, "sourceClientName"> & { sourceClientName?: string } =>
+                    typeof entry?.id === "string" &&
+                    typeof entry?.text === "string" &&
+                    typeof entry?.createdAt === "number" &&
+                    typeof entry?.sourceClientId === "string"
+                )
+                .map((entry) => ({
+                  ...entry,
+                  sourceClientName:
+                    typeof entry.sourceClientName === "string" && entry.sourceClientName.trim()
+                      ? entry.sourceClientName
+                      : entry.sourceClientId
+                }))
             );
             setIsHistoryClearing(false);
             return;
           }
 
           if (payload.type === "history_append" && payload.entry) {
-            const entry = payload.entry as ClipboardHistoryEntry;
+            const entry = payload.entry as ClipboardHistoryEntry & { sourceClientName?: string };
             if (
               typeof entry.id === "string" &&
               typeof entry.text === "string" &&
               typeof entry.createdAt === "number" &&
               typeof entry.sourceClientId === "string"
             ) {
+              const normalizedEntry: ClipboardHistoryEntry = {
+                ...entry,
+                sourceClientName:
+                  typeof entry.sourceClientName === "string" && entry.sourceClientName.trim()
+                    ? entry.sourceClientName
+                    : entry.sourceClientId
+              };
               setHistoryEntries((current) => {
-                if (current.some((existing) => existing.id === entry.id)) {
+                if (current.some((existing) => existing.id === normalizedEntry.id)) {
                   return current;
                 }
-                return [entry, ...current].slice(0, maxHistoryItems);
+                return [normalizedEntry, ...current].slice(0, maxHistoryItems);
               });
             }
             return;
@@ -963,6 +998,12 @@ export default function Index() {
             setHistoryEntries([]);
             setIsHistoryClearing(false);
             setStatusText("Shared history cleared for this server.");
+            return;
+          }
+
+          if (payload.type === "history_delete" && typeof payload.id === "string") {
+            setHistoryEntries((current) => current.filter((entry) => entry.id !== payload.id));
+            setStatusText("History entry deleted.");
             return;
           }
 
@@ -1407,14 +1448,40 @@ export default function Index() {
                   <div className="quickrelay-history-list min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 pt-1">
                     {historyEntries.map((entry) => (
                       <button key={entry.id} type="button" onClick={() => void handleReuseHistoryItem(entry)} className="quickrelay-history-item group w-full rounded-[20px] border border-border/70 bg-background/70 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-background/90">
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-4">
                           <div className="min-w-0">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{formatHistoryTimestamp(entry.createdAt)}</p>
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{formatHistoryTimestamp(entry.createdAt)}</p>
+                              <p className="truncate text-[11px] font-medium text-muted-foreground/80">{entry.sourceClientName}</p>
+                            </div>
                             <div className="mt-2 line-clamp-5 text-sm leading-7 text-foreground">{renderHistoryMarkdown(entry.text)}</div>
                           </div>
-                          <div className="flex shrink-0 flex-col items-end gap-2">
-                            <Button variant="ghost" size="sm" className="text-xs" onClick={(event) => { event.stopPropagation(); void handleCopyHistoryItem(entry); }}>Copy</Button>
-                            <span className="text-[11px] text-muted-foreground group-hover:text-primary">Use in scratchpad</span>
+                          <div className="border-t border-border/60 pt-3">
+                            <div className="flex flex-wrap items-center justify-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="min-w-[84px] text-xs"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleCopyHistoryItem(entry);
+                                }}
+                              >
+                                Copy
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="quickrelay-danger-button min-w-[84px]"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDeleteHistoryItem(entry);
+                                }}
+                                >
+                                Delete
+                              </Button>
+                            </div>
+                            <p className="mt-2 text-center text-[11px] font-medium text-muted-foreground/90">Tap or click card to load into scratchpad</p>
                           </div>
                         </div>
                       </button>
@@ -1424,8 +1491,9 @@ export default function Index() {
               </CardContent>
               <CardFooter className="quickrelay-panel-footer quickrelay-history-footer justify-center p-5 pt-0 sm:p-5 sm:pt-0">
                 <Button
+                  variant="ghost"
                   size="sm"
-                  className="shadow-xl shadow-primary/20"
+                  className="quickrelay-danger-button shadow-none"
                   disabled={historyEntries.length === 0 || isHistoryClearing}
                   onClick={handleClearHistory}
                 >

@@ -91,6 +91,30 @@
 }
 
 @layer components {
+  .quickrelay-danger-button {
+    border: 1px solid rgb(220 38 38 / 0.28);
+    background: rgb(254 242 242 / 0.92);
+    color: rgb(185 28 28);
+  }
+
+  .quickrelay-danger-button:hover:not(:disabled) {
+    background: rgb(254 226 226 / 0.98);
+    color: rgb(153 27 27);
+    border-color: rgb(220 38 38 / 0.42);
+  }
+
+  .dark .quickrelay-danger-button {
+    border-color: rgb(248 113 113 / 0.4);
+    background: rgb(239 68 68 / 0.12);
+    color: rgb(252 165 165);
+  }
+
+  .dark .quickrelay-danger-button:hover:not(:disabled) {
+    background: rgb(239 68 68 / 0.2);
+    color: rgb(254 202 202);
+    border-color: rgb(248 113 113 / 0.55);
+  }
+
   @media (min-width: 1280px) and (max-width: 1440px), (min-width: 1280px) and (max-height: 920px) {
     .quickrelay-page {
       padding-top: 0.55rem;

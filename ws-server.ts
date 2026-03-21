@@ -8,6 +8,7 @@ import { issueWsAccessToken, verifyWsAccessToken } from "./app/lib/access-token.
 import {
   appendHistoryEntry,
   clearHistoryEntries,
+  deleteHistoryEntry,
   getHistoryDbPath,
   getMaxHistoryItems,
   listHistoryEntries,
@@ -18,6 +19,7 @@ type ClipboardUpdateMessage = {
   type: "clipboard_update";
   text: string;
   clientId: string;
+  sourceClientName?: string;
   timestamp: number;
   persistToHistory?: boolean;
   messageId?: string;
@@ -56,6 +58,12 @@ type HistoryAppendMessage = {
 type HistoryClearMessage = {
   type: "history_clear";
   clearedAt: number;
+};
+
+type HistoryDeleteMessage = {
+  type: "history_delete";
+  id: string;
+  deletedAt?: number;
 };
 
 type HistoryTruncateMessage = {
@@ -421,6 +429,7 @@ function isClipboardUpdateMessage(input: unknown): input is ClipboardUpdateMessa
     payload.type === "clipboard_update" &&
     typeof payload.text === "string" &&
     typeof payload.clientId === "string" &&
+    (payload.sourceClientName === undefined || typeof payload.sourceClientName === "string") &&
     typeof payload.timestamp === "number" &&
     (payload.persistToHistory === undefined || typeof payload.persistToHistory === "boolean")
   );
@@ -453,6 +462,14 @@ function isHistoryClearMessage(input: unknown): input is HistoryClearMessage {
   }
   const payload = input as Partial<HistoryClearMessage>;
   return payload.type === "history_clear";
+}
+
+function isHistoryDeleteMessage(input: unknown): input is HistoryDeleteMessage {
+  if (typeof input !== "object" || input === null) {
+    return false;
+  }
+  const payload = input as Partial<HistoryDeleteMessage>;
+  return payload.type === "history_delete" && typeof payload.id === "string";
 }
 
 function isDiscoveryPacket(input: unknown): input is DiscoveryPacket {
@@ -729,6 +746,20 @@ function broadcastHistoryClear() {
   }
 }
 
+function broadcastHistoryDelete(id: string) {
+  const payload: HistoryDeleteMessage = {
+    type: "history_delete",
+    id,
+    deletedAt: Date.now()
+  };
+  for (const socket of inboundSockets) {
+    if (socketRoles.get(socket) !== "client") {
+      continue;
+    }
+    sendJson(socket, payload);
+  }
+}
+
 function broadcastHistoryTruncate(removedIds: string[]) {
   if (removedIds.length === 0) {
     return;
@@ -796,7 +827,8 @@ function applyClipboardMessage(message: ClipboardUpdateMessage, sourceSocket?: W
         id: normalized.messageId,
         text: normalized.text,
         createdAt: normalized.timestamp,
-        sourceClientId: normalized.clientId
+        sourceClientId: normalized.clientId,
+        sourceClientName: normalized.sourceClientName?.trim() || normalized.clientId
       })
     : null;
 
@@ -812,6 +844,14 @@ function applyClipboardMessage(message: ClipboardUpdateMessage, sourceSocket?: W
 function clearHistoryForClients() {
   clearHistoryEntries();
   broadcastHistoryClear();
+}
+
+function deleteHistoryForClients(id: string) {
+  if (!deleteHistoryEntry(id)) {
+    return;
+  }
+  broadcastHistoryDelete(id);
+  broadcastClusterState();
 }
 
 function cleanupSocket(socket: WebSocket) {
@@ -907,6 +947,14 @@ function registerInboundSocketHandlers(socket: WebSocket, request: IncomingMessa
         return;
       }
       clearHistoryForClients();
+      return;
+    }
+
+    if (isHistoryDeleteMessage(parsed)) {
+      if (socketRoles.get(socket) !== "client") {
+        return;
+      }
+      deleteHistoryForClients(parsed.id);
       return;
     }
 
@@ -1031,6 +1079,9 @@ function connectToPeer(host: string, port: number, peerKey: string) {
     }
 
     if (!isClipboardUpdateMessage(parsed)) {
+      if (isHistoryDeleteMessage(parsed)) {
+        deleteHistoryForClients(parsed.id);
+      }
       return;
     }
 
