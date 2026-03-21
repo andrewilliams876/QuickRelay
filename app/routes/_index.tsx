@@ -635,6 +635,18 @@ export default function Index() {
     setStatusText(copied ? "History entry copied to the local clipboard." : "Clipboard write is blocked on this page.");
   }, [writeClipboardText]);
 
+  const handleCopyScratchpad = useCallback(async () => {
+    const value = normalizeClipboardText(clipboardText);
+    if (!value.trim()) {
+      setStatusText("Add some text to the scratchpad before copying it.");
+      return;
+    }
+    lastClipboardRef.current = value;
+    lastUserEditAtRef.current = Date.now();
+    const copied = await writeClipboardText(value);
+    setStatusText(copied ? "Scratchpad copied to the local clipboard." : "Clipboard write is blocked on this page.");
+  }, [clipboardText, writeClipboardText]);
+
   const handleClearHistory = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -1333,6 +1345,21 @@ export default function Index() {
             </CardHeader>
             <CardContent className="quickrelay-panel-content space-y-3.5 p-5 pt-0 sm:p-5 sm:pt-0">
               <div className="relative">
+                <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end p-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="pointer-events-auto h-8 w-8 rounded-xl p-0"
+                    onClick={() => void handleCopyScratchpad()}
+                    aria-label="Copy scratchpad"
+                    title="Copy scratchpad"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+                      <rect x="9" y="9" width="10" height="10" rx="2" />
+                      <path d="M6 15H5a2 2 0 01-2-2V5a2 2 0 012-2h8a2 2 0 012 2v1" />
+                    </svg>
+                  </Button>
+                </div>
                 <Textarea
                   id="clipboard-mirror"
                   value={clipboardText}
@@ -1344,10 +1371,10 @@ export default function Index() {
                       void handleShareScratchpad();
                     }
                   }}
-                  className="quickrelay-scratchpad-input min-h-[230px] pb-16 font-mono text-sm leading-7 sm:min-h-[280px]"
+                  className="quickrelay-scratchpad-input min-h-[230px] pb-16 pt-12 font-mono text-sm leading-7 sm:min-h-[280px]"
                 />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
-                  <Button size="sm" onClick={() => void handleShareScratchpad()} className="pointer-events-auto shadow-xl shadow-primary/20">
+                  <Button variant="outline" size="sm" onClick={() => void handleShareScratchpad()} className="pointer-events-auto text-xs">
                     Share + Save
                   </Button>
                 </div>
