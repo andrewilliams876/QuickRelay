@@ -129,9 +129,9 @@ For Nginx Proxy Manager, the setup should look like this:
 
 This is required because:
 
-- the Remix app UI runs on port `3000`
+- QuickRelay app UI runs on port `3000`
 - the QuickRelay websocket server runs separately on port `3001`
-- `/ws` must be routed to the websocket server, not back to the Remix app
+- `/ws` must be routed to the websocket server, not back to the QuickRelay app
 
 If `/ws` is accidentally sent to port `3000`, QuickRelay will stay offline and your logs will show errors like:
 
