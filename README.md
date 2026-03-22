@@ -55,7 +55,7 @@ This keeps setup simple and avoids sync conflicts.
 
 ## Ports
 
-- `3000/tcp`: Remix UI
+- `3000/tcp`: Web UI
 - `3001/tcp`: WebSocket sync server
 
 ## Persistent history
@@ -113,6 +113,34 @@ If you are serving QuickRelay behind one HTTPS domain:
 - Turn websocket support on for both routes
 - Set `WS_PUBLIC_PATH=/ws`
 - Leave `WS_PUBLIC_URL=` empty unless you need a hard override
+
+### Nginx Proxy Manager example
+
+For Nginx Proxy Manager, the setup should look like this:
+
+- Main proxy host
+  - domain -> `http://<server-ip>:3000`
+  - websocket support -> enabled
+- Custom location
+  - location -> `/ws`
+  - forward host/IP -> `<server-ip>`
+  - forward port -> `3001`
+  - websocket support -> enabled
+
+This is required because:
+
+- QuickRelay app UI runs on port `3000`
+- the QuickRelay websocket server runs separately on port `3001`
+- `/ws` must be routed to the websocket server, not back to the QuickRelay app
+
+If `/ws` is accidentally sent to port `3000`, QuickRelay will stay offline and your logs will show errors like:
+
+```text
+GET /ws 404
+Error: No route matches URL "/ws"
+```
+
+That means the reverse proxy is forwarding the websocket path to the web app instead of the websocket server.
 
 ## Notes
 
