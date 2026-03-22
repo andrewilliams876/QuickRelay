@@ -95,7 +95,7 @@ This means history survives:
 - `ACCESS_PIN=your-secret`
   Optional shared passphrase for client access. Clients unlock once per browser session and then connect with a signed short-lived websocket token.
 
-- `LOCAL_NODE_IP=10.50.100.13`
+- `LOCAL_NODE_IP=`
   Forces which IP address the UI shows as the server's LAN address. Set this if Docker or a bridge interface is being detected instead of the IP you actually want users to open.
 
 - `DISCOVERY_ENABLED=false`
