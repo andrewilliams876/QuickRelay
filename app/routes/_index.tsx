@@ -399,6 +399,13 @@ function renderHistoryMarkdown(text: string) {
   ));
 }
 
+function shouldSuppressTransientStatus() {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return document.hidden || typeof document.hasFocus === "function" && !document.hasFocus();
+}
+
 export default function Index() {
   const { wsPort, wsPublicPath, wsPublicUrl, authRequired, maxHistoryItems } = useLoaderData<typeof loader>();
 
@@ -429,6 +436,7 @@ export default function Index() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const disconnectIndicatorTimerRef = useRef<number | null>(null);
   const clipboardPollRef = useRef<number | null>(null);
   const liveMirrorTimerRef = useRef<number | null>(null);
   const lastClipboardRef = useRef("");
@@ -438,6 +446,7 @@ export default function Index() {
   const deviceIpRef = useRef("");
   const accessTokenRef = useRef("");
   const lastUserEditAtRef = useRef(0);
+  const hasLocalScratchpadChangesRef = useRef(false);
   const lastTimestampByClientRef = useRef(new Map<string, number>());
   const manualLockRef = useRef(false);
   const connectAttemptRef = useRef(0);
@@ -572,12 +581,14 @@ export default function Index() {
     lastClipboardRef.current = value;
     skipBroadcastUntilRef.current = 0;
     lastUserEditAtRef.current = Date.now();
+    hasLocalScratchpadChangesRef.current = Boolean(value);
     if (liveMirrorTimerRef.current !== null) {
       window.clearTimeout(liveMirrorTimerRef.current);
     }
     if (!value) {
       void writeClipboardText("");
       sendClipboard("", { persistToHistory: false });
+      hasLocalScratchpadChangesRef.current = false;
       setStatusText("Scratchpad cleared locally and across the live clipboard state.");
       return;
     }
@@ -608,6 +619,7 @@ export default function Index() {
     lastClipboardRef.current = value;
     skipBroadcastUntilRef.current = 0;
     lastUserEditAtRef.current = Date.now();
+    hasLocalScratchpadChangesRef.current = false;
 
     const copied = await writeClipboardText(value);
     const sent = sendClipboard(value, { persistToHistory: true });
@@ -626,6 +638,7 @@ export default function Index() {
     lastClipboardRef.current = entry.text;
     skipBroadcastUntilRef.current = 0;
     lastUserEditAtRef.current = Date.now();
+    hasLocalScratchpadChangesRef.current = true;
     const copied = await writeClipboardText(entry.text);
     setStatusText(
       copied
@@ -858,29 +871,44 @@ export default function Index() {
     lastClipboardRef.current = incomingText;
     skipBroadcastUntilRef.current = Date.now() + 5_000;
     lastUserEditAtRef.current = Date.now();
+    hasLocalScratchpadChangesRef.current = false;
     setClipboardText(incomingText);
     setLastRemoteUpdate(new Date(timestamp).toLocaleTimeString());
+    const suppressTransientStatus = shouldSuppressTransientStatus();
 
     if (!navigator.clipboard?.writeText) {
-      setStatusText("Remote text received. Clipboard write API is unavailable.");
+      if (!suppressTransientStatus) {
+        setStatusText("Remote text received. Clipboard write API is unavailable.");
+      }
       return;
     }
 
     try {
       await navigator.clipboard.writeText(incomingText);
-      setStatusText("Remote clipboard update applied automatically.");
+      if (!suppressTransientStatus) {
+        setStatusText("Remote clipboard update applied automatically.");
+      }
     } catch {
-      setStatusText("Remote text received, but browser blocked clipboard write.");
+      if (!suppressTransientStatus) {
+        setStatusText("Remote text received, but browser blocked clipboard write.");
+      }
     }
   }, []);
 
   const pollLocalClipboard = useCallback(async () => {
     if (!window.isSecureContext) {
-      setPermissionLevel((current) => (current === "granted" ? current : "limited"));
-      setStatusText("Clipboard auto-read requires HTTPS (or localhost). Text sync still works.");
+      if (!shouldSuppressTransientStatus()) {
+        setPermissionLevel((current) => (current === "granted" ? current : "limited"));
+      }
+      if (!shouldSuppressTransientStatus()) {
+        setStatusText("Clipboard auto-read requires HTTPS (or localhost). Text sync still works.");
+      }
       return;
     }
     if (permissionLevel !== "granted") {
+      return;
+    }
+    if (hasLocalScratchpadChangesRef.current) {
       return;
     }
     if (Date.now() - lastUserEditAtRef.current < 15_000) {
@@ -893,18 +921,26 @@ export default function Index() {
 
     try {
       const text = await navigator.clipboard.readText();
+      if (!text && lastClipboardRef.current) {
+        return;
+      }
       if (text === lastClipboardRef.current) {
         return;
       }
       lastClipboardRef.current = text;
       setClipboardText(text);
+      hasLocalScratchpadChangesRef.current = false;
       if (Date.now() >= skipBroadcastUntilRef.current) {
         sendClipboard(text, { persistToHistory: false });
-        setStatusText("Local clipboard detected and shared.");
+        if (!shouldSuppressTransientStatus()) {
+          setStatusText("Local clipboard detected and shared.");
+        }
       }
     } catch {
-      setStatusText("Clipboard read blocked by browser permissions.");
-      setPermissionLevel((current) => (current === "granted" ? "limited" : current));
+      if (!shouldSuppressTransientStatus()) {
+        setStatusText("Clipboard read blocked by browser permissions.");
+        setPermissionLevel((current) => (current === "granted" ? "limited" : current));
+      }
     }
   }, [permissionLevel, sendClipboard]);
 
@@ -930,9 +966,15 @@ export default function Index() {
         if (isCancelled) {
           return;
         }
+        if (disconnectIndicatorTimerRef.current !== null) {
+          window.clearTimeout(disconnectIndicatorTimerRef.current);
+          disconnectIndicatorTimerRef.current = null;
+        }
         setIsConnected(true);
         connectAttemptRef.current = 0;
-        setStatusText("Connected. Watching clipboard changes.");
+        setStatusText((current) =>
+          current === "Connected. Watching clipboard changes." ? current : "Connected. Watching clipboard changes."
+        );
         setAuthGateLocked(false);
         sendClientHello();
       };
@@ -1059,14 +1101,24 @@ export default function Index() {
           setStatusText("Session locked. Enter ACCESS_PIN to continue.");
           return;
         }
-        setIsConnected(false);
-        setStatusText(authRequired ? "Disconnected. Reconnecting (check ACCESS_PIN if this persists)..." : "Disconnected. Reconnecting...");
+        if (disconnectIndicatorTimerRef.current !== null) {
+          window.clearTimeout(disconnectIndicatorTimerRef.current);
+        }
+        disconnectIndicatorTimerRef.current = window.setTimeout(() => {
+          setIsConnected(false);
+          if (!shouldSuppressTransientStatus()) {
+            setStatusText(authRequired ? "Disconnected. Reconnecting (check ACCESS_PIN if this persists)..." : "Disconnected. Reconnecting...");
+          }
+          disconnectIndicatorTimerRef.current = null;
+        }, 2500);
         setAuthGateLocked(authRequired && !accessTokenRef.current.trim());
         reconnectTimerRef.current = window.setTimeout(connect, 1_500);
       };
 
       socket.onerror = () => {
-        setStatusText(authRequired ? "WebSocket error or ACCESS_PIN rejected. Retrying..." : "WebSocket error. Retrying...");
+        if (!shouldSuppressTransientStatus()) {
+          setStatusText(authRequired ? "WebSocket error or ACCESS_PIN rejected. Retrying..." : "WebSocket error. Retrying...");
+        }
       };
     };
 
@@ -1092,6 +1144,10 @@ export default function Index() {
         window.clearInterval(clipboardPollRef.current);
         clipboardPollRef.current = null;
       }
+      if (disconnectIndicatorTimerRef.current !== null) {
+        window.clearTimeout(disconnectIndicatorTimerRef.current);
+        disconnectIndicatorTimerRef.current = null;
+      }
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -1114,6 +1170,7 @@ export default function Index() {
       const latest = await navigator.clipboard.readText();
       lastClipboardRef.current = latest;
       setClipboardText(latest);
+      hasLocalScratchpadChangesRef.current = false;
       setPermissionLevel("granted");
       setStatusText("Clipboard permissions enabled.");
       sendClipboard(latest, { persistToHistory: false });
