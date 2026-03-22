@@ -148,10 +148,11 @@ That means the reverse proxy is forwarding the websocket path to the web app ins
 - The scratchpad and history UI still work even when direct clipboard APIs are limited.
 - For the smoothest remote clipboard behavior, use HTTPS or localhost.
 - History is shared per QuickRelay server instance in this version; it is not replicated across multiple server histories.
+- Source code is licensed under MIT. Name, branding, and logo usage are described in [TERMS.md](./TERMS.md).
 
 ## CI/CD Docker publishing
 
-This repo now includes a GitHub Actions workflow at [.github/workflows/docker-publish.yml](/c:/Users/Andre/Desktop/QuickRelay/.github/workflows/docker-publish.yml).
+This repo now includes a GitHub Actions workflow at [.github/workflows/docker-publish.yml](./.github/workflows/docker-publish.yml).
 
 What it does:
 
@@ -187,7 +188,7 @@ docker pull ghcr.io/andrewilliams876/quickrelay:dev
 
 ## Using the published image in Docker Compose
 
-This repo's [docker-compose.yml](/c:/Users/Andre/Desktop/QuickRelay/docker-compose.yml) is already set up to pull the published image using an env-controlled tag:
+This repo's [docker-compose.yml](./docker-compose.yml) is already set up to pull the published image using an env-controlled tag:
 
 ```yaml
 image: ghcr.io/andrewilliams876/quickrelay:${QUICKRELAY_IMAGE_TAG:-latest}
