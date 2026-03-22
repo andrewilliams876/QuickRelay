@@ -88,4 +88,199 @@
   ::selection {
     background: hsl(var(--primary) / 0.22);
   }
+
+  .quickrelay-page textarea,
+  .quickrelay-history-list,
+  .quickrelay-page ul.overflow-y-auto {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(220 16% 70% / 0.75) transparent;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar,
+  .quickrelay-history-list::-webkit-scrollbar,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-track,
+  .quickrelay-history-list::-webkit-scrollbar-track,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-thumb,
+  .quickrelay-history-list::-webkit-scrollbar-thumb,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb {
+    background: hsl(220 16% 70% / 0.72);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .quickrelay-page textarea::-webkit-scrollbar-thumb:hover,
+  .quickrelay-history-list::-webkit-scrollbar-thumb:hover,
+  .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(220 16% 60% / 0.9);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .dark .quickrelay-page textarea,
+  .dark .quickrelay-history-list,
+  .dark .quickrelay-page ul.overflow-y-auto {
+    scrollbar-color: hsl(219 16% 42% / 0.85) transparent;
+  }
+
+  .dark .quickrelay-page textarea::-webkit-scrollbar-thumb,
+  .dark .quickrelay-history-list::-webkit-scrollbar-thumb,
+  .dark .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb {
+    background: hsl(219 16% 42% / 0.82);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .dark .quickrelay-page textarea::-webkit-scrollbar-thumb:hover,
+  .dark .quickrelay-history-list::-webkit-scrollbar-thumb:hover,
+  .dark .quickrelay-page ul.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(219 16% 52% / 0.96);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  .quickrelay-danger-button {
+    border: 1px solid rgb(220 38 38 / 0.28);
+    background: rgb(254 242 242 / 0.92);
+    color: rgb(185 28 28);
+  }
+
+  .quickrelay-danger-button:hover:not(:disabled) {
+    background: rgb(254 226 226 / 0.98);
+    color: rgb(153 27 27);
+    border-color: rgb(220 38 38 / 0.42);
+  }
+
+  .dark .quickrelay-danger-button {
+    border-color: rgb(248 113 113 / 0.4);
+    background: rgb(239 68 68 / 0.12);
+    color: rgb(252 165 165);
+  }
+
+  .dark .quickrelay-danger-button:hover:not(:disabled) {
+    background: rgb(239 68 68 / 0.2);
+    color: rgb(254 202 202);
+    border-color: rgb(248 113 113 / 0.55);
+  }
+
+  @media (min-width: 1280px) and (max-width: 1440px), (min-width: 1280px) and (max-height: 920px) {
+    .quickrelay-page {
+      padding-top: 0.55rem;
+      padding-bottom: 0.8rem;
+    }
+
+    .quickrelay-shell {
+      gap: 0.75rem;
+    }
+
+    .quickrelay-hero {
+      gap: 0.7rem;
+      padding: 0.95rem 1.1rem;
+      border-radius: 1.3rem;
+    }
+
+    .quickrelay-hero-title {
+      font-size: clamp(1.8rem, 2.2vw, 2.2rem);
+      line-height: 1;
+    }
+
+    .quickrelay-hero-copy {
+      max-width: 52rem;
+      line-height: 1.6;
+    }
+
+    .quickrelay-workspace {
+      gap: 0.75rem;
+      grid-template-columns: minmax(0, 1.95fr) 310px 310px;
+    }
+
+    .quickrelay-page .quickrelay-panel {
+      border-radius: 1.25rem;
+    }
+
+    .quickrelay-page .quickrelay-panel-header {
+      gap: 0.65rem;
+      padding: 1rem 1rem 0.85rem;
+    }
+
+    .quickrelay-page .quickrelay-panel-content,
+    .quickrelay-page .quickrelay-panel-footer {
+      padding-left: 1rem;
+      padding-right: 1rem;
+    }
+
+    .quickrelay-page .quickrelay-panel-content {
+      padding-bottom: 1rem;
+    }
+
+    .quickrelay-page .quickrelay-panel-footer {
+      padding-bottom: 1rem;
+    }
+
+    .quickrelay-page .quickrelay-section-title {
+      font-size: clamp(1.25rem, 1.55vw, 1.45rem);
+      line-height: 1.1;
+    }
+
+    .quickrelay-page .quickrelay-section-copy {
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .quickrelay-page .quickrelay-live-route {
+      padding: 0.65rem 0.9rem;
+    }
+
+    .quickrelay-page .quickrelay-scratchpad-input {
+      min-height: 12.5rem;
+    }
+
+    .quickrelay-page .quickrelay-subpanel {
+      padding: 0.85rem;
+      border-radius: 1.1rem;
+    }
+
+    .quickrelay-page .quickrelay-history-list {
+      gap: 0.65rem;
+    }
+
+    .quickrelay-page .quickrelay-history-item {
+      padding: 0.85rem;
+      border-radius: 1rem;
+    }
+
+    .quickrelay-page .quickrelay-stat-grid {
+      gap: 0.65rem;
+    }
+  }
+
+  @media (min-width: 1280px) and (max-width: 1366px), (min-width: 1280px) and (max-height: 820px) {
+    .quickrelay-page .quickrelay-hero {
+      padding: 0.85rem 1rem;
+    }
+
+    .quickrelay-page .quickrelay-workspace {
+      gap: 0.65rem;
+      grid-template-columns: minmax(0, 1.9fr) 290px 290px;
+    }
+
+    .quickrelay-page .quickrelay-scratchpad-input {
+      min-height: 11.5rem;
+    }
+
+    .quickrelay-page .quickrelay-section-title {
+      font-size: clamp(1.15rem, 1.45vw, 1.35rem);
+    }
+  }
 }

@@ -1,27 +1,29 @@
 # QuickRelay
 
-QuickRelay is a simple LAN clipboard tool.
+QuickRelay is a realtime LAN scratchpad with shared clipboard sync and persistent history.
 
-Open it on two or more devices, paste text into one, and it shows up on the others instantly. No accounts, no cloud, just real-time sync on your local network.
+## What it does
 
+- Keeps a live scratchpad in sync across connected devices on the same LAN
+- Stores shared history in SQLite so entries survive server restarts
+- Lets you click history items to reuse them or copy them with one button
+- Shows connected clients, device identity, and server health in the UI
+- Supports an optional `ACCESS_PIN` gate for websocket access
+
+## Recommended setup
+
+Run one QuickRelay server on your network and open it from any device on the same LAN:
 
 ## How it works
 
-QuickRelay runs as a single server on your LAN.
+This release is designed for the single-server LAN setup. Peer discovery can stay off unless you are intentionally linking multiple servers.
 
-- Open the app in your browser on any device
-- All connected clients share the same live text surface
-- Changes sync in real time over WebSockets
-
-Example:
-
-http://<SERVER_LAN_IP>:3000
-
-
-## Quick Start
+## Quick start
 
 ```bash
-docker compose up --build -d
+copy .env.example .env
+docker compose pull
+docker compose up -d
 docker compose logs -f
 ```
 
@@ -53,88 +55,162 @@ This keeps setup simple and avoids sync conflicts.
 
 ## Ports
 
-- `3000/tcp` — Web UI  
-- `3001/tcp` — WebSocket sync  
+- `3000/tcp`: Remix UI
+- `3001/tcp`: WebSocket sync server
 
+## Persistent history
 
-## Configuration
+QuickRelay now stores shared history in SQLite.
 
-### Core
+- Default container path: `/data/quickrelay-history.sqlite`
+- Docker volume: `quickrelay_data`
+- Default retention: last `50` entries
 
-- `NODE_ENV=production`  
-  Run in production mode for stable deployments  
+This means history survives:
 
-- `WS_HOST=0.0.0.0`  
-  Allows the WebSocket server to accept connections from outside the container  
+- app restarts
+- container restarts
+- normal Docker rebuild/redeploy flows, as long as the volume is kept
 
+## Important environment flags
 
-### Networking
+- `NODE_ENV=production`
+  Use this for normal Docker deployment. It tells the app to run in production mode instead of a hot-reload dev workflow.
 
-- `WS_PUBLIC_PATH=/ws`  
-  Use when running behind a reverse proxy on the same domain  
+- `WS_HOST=0.0.0.0`
+  This makes the websocket server listen on all container interfaces so other LAN devices can reach it through Docker's published port mapping.
 
-- `WS_PUBLIC_URL=`  
-  Optional full override (e.g. `wss://quickrelay.example.com/ws`)  
+- `WS_PUBLIC_PATH=/ws`
+  Use this when the browser should reach websockets through the same public domain as the app, for example behind Nginx Proxy Manager or another reverse proxy. The frontend will try `wss://your-domain/ws`.
 
-- `LOCAL_NODE_IP=192.168.x.x`  
-  Forces which IP is shown as the server identity  
+- `WS_PUBLIC_URL=`
+  Leave this empty in most setups. Set it only when you want to force a full websocket URL such as `wss://quickrelay.example.com/ws`. If this is set, it takes priority over `WS_PUBLIC_PATH`.
 
+- `HISTORY_DB_PATH=/data/quickrelay-history.sqlite`
+  Controls where the SQLite file lives. In Docker, keep this inside the mounted data volume so history persists.
 
-### Access control
+- `MAX_HISTORY_ITEMS=50`
+  Caps the stored history size. Older items are trimmed automatically after new entries are saved.
 
-- `ACCESS_PIN=`  
-  Optional shared passphrase required before clients can connect  
+- `ACCESS_PIN=your-secret`
+  Optional shared passphrase for client access. Clients unlock once per browser session and then connect with a signed short-lived websocket token.
 
+- `LOCAL_NODE_IP=10.50.100.13`
+  Forces which IP address the UI shows as the server's LAN address. Set this if Docker or a bridge interface is being detected instead of the IP you actually want users to open.
 
-### Behaviour
+- `DISCOVERY_ENABLED=false`
+  Keep this false for the recommended single-server setup.
 
-- `DISCOVERY_ENABLED=false`  
-  Recommended for single-server setups  
+- `CLUSTER_STATE_INTERVAL_MS=1500`
+  Controls how often the UI receives health/status refreshes.
 
-- `CLUSTER_STATE_INTERVAL_MS=1500`  
-  UI refresh interval for session/client state  
+## Reverse proxy example
 
+If you are serving QuickRelay behind one HTTPS domain:
 
-## Reverse Proxy (Nginx Proxy Manager)
-
-Use a single HTTPS domain.
-
-### Proxy host
-
-- Domain → `http://<server-ip>:3000`  
-- WebSocket support: ON  
-- Force SSL: ON  
-
-### Custom location
-
-- `/ws` → `http://<server-ip>:3001`  
-- WebSocket support: ON  
-
-### App config
-
-```bash
-WS_PUBLIC_PATH=/ws
-WS_PUBLIC_URL=
-ACCESS_PIN=your-secret
-```
-
+- Route the app domain to `http://<server-ip>:3000`
+- Route `/ws` to `http://<server-ip>:3001`
+- Turn websocket support on for both routes
+- Set `WS_PUBLIC_PATH=/ws`
+- Leave `WS_PUBLIC_URL=` empty unless you need a hard override
 
 ## Notes
 
-- Clipboard APIs may be restricted on plain HTTP depending on browser policy  
-- Sync still works even if direct clipboard access is blocked  
-- For full clipboard support, use HTTPS or localhost  
-- If Docker networking shows the wrong IP, you can override it in the UI  
-- WebSocket auth uses short-lived tokens — use HTTPS/WSS to protect them  
+- Clipboard read/write permissions can still be restricted by the browser on plain HTTP.
+- The scratchpad and history UI still work even when direct clipboard APIs are limited.
+- For the smoothest remote clipboard behavior, use HTTPS or localhost.
+- History is shared per QuickRelay server instance in this version; it is not replicated across multiple server histories.
 
+## CI/CD Docker publishing
 
-## Summary
+This repo now includes a GitHub Actions workflow at [.github/workflows/docker-publish.yml](/c:/Users/Andre/Desktop/QuickRelay/.github/workflows/docker-publish.yml).
 
-QuickRelay is built to stay simple:
+What it does:
 
-- copy text  
-- see it instantly on another device  
-- keep everything inside your LAN  
-- run it anywhere with Docker  
+- runs on every push to `main` and `dev`
+- builds the Docker image from the root `Dockerfile`
+- publishes the image to GitHub Container Registry
+- pushes both:
+  - `ghcr.io/andrewilliams876/quickrelay:latest` from `main`
+  - `ghcr.io/andrewilliams876/quickrelay:dev` from `dev`
+  - `ghcr.io/andrewilliams876/quickrelay:sha-<commit>` from either branch
 
-No accounts, no external services, no unnecessary complexity.
+Notes:
+
+- it uses GitHub's built-in `GITHUB_TOKEN`, so you do not need to add Docker Hub credentials for this workflow
+- if you want people outside the repo to pull the image, make the GitHub Container Registry package visible in your repo/package settings
+- `latest` is reserved for `main`, while `dev` is reserved for the development branch so test pushes do not overwrite your stable tag
+
+## Pulling published images
+
+Use the published image that matches the branch you want to run:
+
+- stable release from `main`
+  - `ghcr.io/andrewilliams876/quickrelay:latest`
+- testing build from `dev`
+  - `ghcr.io/andrewilliams876/quickrelay:dev`
+
+Example pulls:
+
+```bash
+docker pull ghcr.io/andrewilliams876/quickrelay:latest
+docker pull ghcr.io/andrewilliams876/quickrelay:dev
+```
+
+## Using the published image in Docker Compose
+
+This repo's [docker-compose.yml](/c:/Users/Andre/Desktop/QuickRelay/docker-compose.yml) is already set up to pull the published image using an env-controlled tag:
+
+```yaml
+image: ghcr.io/andrewilliams876/quickrelay:${QUICKRELAY_IMAGE_TAG:-latest}
+```
+
+That means you do not need to edit the compose file every time you switch branches. You only change the tag value in `.env`.
+
+Use `.env` like this for stable `main`:
+
+```env
+QUICKRELAY_IMAGE_TAG=latest
+```
+
+Use `.env` like this for testing `dev`:
+
+```env
+QUICKRELAY_IMAGE_TAG=dev
+```
+
+If you prefer to hardcode the image directly, these are the equivalent tags:
+
+Stable `main` image:
+
+```yaml
+services:
+  quickrelay:
+    image: ghcr.io/andrewilliams876/quickrelay:latest
+```
+
+Testing `dev` image:
+
+```yaml
+services:
+  quickrelay:
+    image: ghcr.io/andrewilliams876/quickrelay:dev
+```
+
+Important:
+
+- this compose file now uses `image:` by default so it follows your published GitHub Container Registry builds
+- switch between `main` and `dev` by changing `QUICKRELAY_IMAGE_TAG` in `.env`
+- run `docker compose pull` before `docker compose up -d` when you want the newest published image
+- if you ever want to go back to local builds, swap the `image:` line back to a `build:` block
+
+## Suggested deployment flow
+
+- working on new features
+  - push to `dev`
+  - set `QUICKRELAY_IMAGE_TAG=dev`
+  - run `docker compose pull && docker compose up -d`
+- ready for stable release
+  - merge or push to `main`
+  - set `QUICKRELAY_IMAGE_TAG=latest`
+  - run `docker compose pull && docker compose up -d`
