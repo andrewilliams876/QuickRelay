@@ -14,9 +14,7 @@ QuickRelay is a realtime LAN scratchpad with shared clipboard sync and persisten
 
 Run one QuickRelay server on your network and open it from any device on the same LAN:
 
-```text
-http://<SERVER_LAN_IP>:3000
-```
+## How it works
 
 This release is designed for the single-server LAN setup. Peer discovery can stay off unless you are intentionally linking multiple servers.
 
@@ -28,6 +26,32 @@ docker compose pull
 docker compose up -d
 docker compose logs -f
 ```
+
+Then open:
+
+http://<your-server-ip>:3000
+
+
+## Features
+
+- Shared live clipboard textbox across all connected devices  
+- Per-device identity (name + IP)  
+- Client rename support from the UI  
+- Optional `ACCESS_PIN` for gated LAN access  
+- Works over LAN IP or behind a reverse proxy  
+- Docker-ready deployment  
+
+
+## Architecture
+
+QuickRelay is designed to run as a single server.
+
+- No peer discovery required  
+- No multi-node clustering needed  
+- Clients connect directly to the server  
+
+This keeps setup simple and avoids sync conflicts.
+
 
 ## Ports
 
