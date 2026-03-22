@@ -23,7 +23,9 @@ This release is designed for the single-server LAN setup. Peer discovery can sta
 ## Quick start
 
 ```bash
-docker compose up --build -d
+copy .env.example .env
+docker compose pull
+docker compose up -d
 docker compose logs -f
 ```
 
@@ -94,3 +96,97 @@ If you are serving QuickRelay behind one HTTPS domain:
 - The scratchpad and history UI still work even when direct clipboard APIs are limited.
 - For the smoothest remote clipboard behavior, use HTTPS or localhost.
 - History is shared per QuickRelay server instance in this version; it is not replicated across multiple server histories.
+
+## CI/CD Docker publishing
+
+This repo now includes a GitHub Actions workflow at [.github/workflows/docker-publish.yml](/c:/Users/Andre/Desktop/QuickRelay/.github/workflows/docker-publish.yml).
+
+What it does:
+
+- runs on every push to `main` and `dev`
+- builds the Docker image from the root `Dockerfile`
+- publishes the image to GitHub Container Registry
+- pushes both:
+  - `ghcr.io/andrewilliams876/quickrelay:latest` from `main`
+  - `ghcr.io/andrewilliams876/quickrelay:dev` from `dev`
+  - `ghcr.io/andrewilliams876/quickrelay:sha-<commit>` from either branch
+
+Notes:
+
+- it uses GitHub's built-in `GITHUB_TOKEN`, so you do not need to add Docker Hub credentials for this workflow
+- if you want people outside the repo to pull the image, make the GitHub Container Registry package visible in your repo/package settings
+- `latest` is reserved for `main`, while `dev` is reserved for the development branch so test pushes do not overwrite your stable tag
+
+## Pulling published images
+
+Use the published image that matches the branch you want to run:
+
+- stable release from `main`
+  - `ghcr.io/andrewilliams876/quickrelay:latest`
+- testing build from `dev`
+  - `ghcr.io/andrewilliams876/quickrelay:dev`
+
+Example pulls:
+
+```bash
+docker pull ghcr.io/andrewilliams876/quickrelay:latest
+docker pull ghcr.io/andrewilliams876/quickrelay:dev
+```
+
+## Using the published image in Docker Compose
+
+This repo's [docker-compose.yml](/c:/Users/Andre/Desktop/QuickRelay/docker-compose.yml) is already set up to pull the published image using an env-controlled tag:
+
+```yaml
+image: ghcr.io/andrewilliams876/quickrelay:${QUICKRELAY_IMAGE_TAG:-latest}
+```
+
+That means you do not need to edit the compose file every time you switch branches. You only change the tag value in `.env`.
+
+Use `.env` like this for stable `main`:
+
+```env
+QUICKRELAY_IMAGE_TAG=latest
+```
+
+Use `.env` like this for testing `dev`:
+
+```env
+QUICKRELAY_IMAGE_TAG=dev
+```
+
+If you prefer to hardcode the image directly, these are the equivalent tags:
+
+Stable `main` image:
+
+```yaml
+services:
+  quickrelay:
+    image: ghcr.io/andrewilliams876/quickrelay:latest
+```
+
+Testing `dev` image:
+
+```yaml
+services:
+  quickrelay:
+    image: ghcr.io/andrewilliams876/quickrelay:dev
+```
+
+Important:
+
+- this compose file now uses `image:` by default so it follows your published GitHub Container Registry builds
+- switch between `main` and `dev` by changing `QUICKRELAY_IMAGE_TAG` in `.env`
+- run `docker compose pull` before `docker compose up -d` when you want the newest published image
+- if you ever want to go back to local builds, swap the `image:` line back to a `build:` block
+
+## Suggested deployment flow
+
+- working on new features
+  - push to `dev`
+  - set `QUICKRELAY_IMAGE_TAG=dev`
+  - run `docker compose pull && docker compose up -d`
+- ready for stable release
+  - merge or push to `main`
+  - set `QUICKRELAY_IMAGE_TAG=latest`
+  - run `docker compose pull && docker compose up -d`

@@ -1,8 +1,6 @@
 services:
   quickrelay:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/andrewilliams876/quickrelay:${QUICKRELAY_IMAGE_TAG:-latest}
     container_name: quickrelay
     ports:
       - "3000:3000" 
