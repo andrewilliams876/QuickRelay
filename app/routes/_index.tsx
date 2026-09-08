@@ -370,15 +370,25 @@ function renderMarkdownSegment(segment: string, keyPrefix: string) {
   });
 }
 
+function getSafeHistoryUrl(segment: string) {
+  try {
+    const url = new URL(segment);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function renderHistoryMarkdown(text: string) {
   return text.split("\n").map((line, lineIndex, lines) => (
     <Fragment key={`line-${lineIndex}`}>
       {line.split(/(https?:\/\/[^\s]+)/g).filter(Boolean).map((segment, segmentIndex) => {
-        if (/^https?:\/\/[^\s]+$/.test(segment)) {
+        const safeUrl = /^https?:\/\/[^\s]+$/.test(segment) ? getSafeHistoryUrl(segment) : null;
+        if (safeUrl) {
           return (
             <a
               key={`line-${lineIndex}-url-${segmentIndex}`}
-              href={segment}
+              href={safeUrl}
               target="_blank"
               rel="noreferrer"
               className="font-medium text-primary underline decoration-primary/40 underline-offset-4"
