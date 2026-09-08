@@ -370,9 +370,9 @@ function renderMarkdownSegment(segment: string, keyPrefix: string) {
   });
 }
 
-function getSafeHistoryUrl(segment: string) {
+function getSafeExternalUrl(value: string) {
   try {
-    const url = new URL(segment);
+    const url = new URL(value);
     return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
   } catch {
     return null;
@@ -383,7 +383,7 @@ function renderHistoryMarkdown(text: string) {
   return text.split("\n").map((line, lineIndex, lines) => (
     <Fragment key={`line-${lineIndex}`}>
       {line.split(/(https?:\/\/[^\s]+)/g).filter(Boolean).map((segment, segmentIndex) => {
-        const safeUrl = /^https?:\/\/[^\s]+$/.test(segment) ? getSafeHistoryUrl(segment) : null;
+        const safeUrl = getSafeExternalUrl(segment);
         if (safeUrl) {
           return (
             <a
